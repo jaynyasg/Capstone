@@ -1,0 +1,10 @@
+# Default: let git handle line endings for text
+* text=auto
+
+# Binary files — never apply line-ending conversion
+*.pdf binary
+*.pt binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.gif binary

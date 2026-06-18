@@ -1,0 +1,35 @@
+# Local agent / tooling state
+.agents/
+
+# Aegis runtime artifacts (local traces)
+.aegis/
+
+# Secrets & environment
+.env
+.env.*
+*.local
+secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ML model artifacts
+*.pt
+*.onnx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
