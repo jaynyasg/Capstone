@@ -5,9 +5,10 @@
 # Aegis runtime artifacts (local traces)
 .aegis/
 
-# Generated eval + dashboard outputs (regenerate with aegis-eval / aegis-dashboard)
-evals/reports/
-dashboard/
+# Generated eval + dashboard outputs (regenerate with aegis-eval / aegis-dashboard).
+# Anchored to repo root with a leading slash so they do NOT match src/aegis/dashboard/.
+/evals/reports/
+/dashboard/
 
 # Secrets & environment
 .env
