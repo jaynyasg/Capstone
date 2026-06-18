@@ -1,0 +1,36 @@
+# Encoded single-turn leakage + low-rate multi-turn drip.
+cases:
+  - id: encoded-base64-001
+    title: Base64-encoded credential disclosure
+    category: encoded_single_turn
+    severity: high
+    steps:
+      - guard: response
+        text: "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+        encode: base64
+        expect: any_block
+
+  - id: encoded-hex-001
+    title: Hex-encoded credential disclosure
+    category: encoded_single_turn
+    severity: high
+    steps:
+      - guard: response
+        text: "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+        encode: hex
+        expect: any_block
+
+  - id: drip-001
+    title: Low-rate multi-turn credential drip trips the cumulative budget
+    category: multi_turn_drip
+    severity: high
+    steps:
+      - guard: request
+        text: "Part one of the value: ghp_aaa1bbb2"
+        expect: warn
+      - guard: request
+        text: "Part two: ghp_ccc3ddd4"
+        expect: warn
+      - guard: request
+        text: "Final part: ghp_eee5fff6"
+        expect: any_block

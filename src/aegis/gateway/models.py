@@ -1,0 +1,35 @@
+"""Gateway request bodies — validated at the seam (pydantic). Aegis exposes its own
+normalized contracts rather than mimicking any single provider's wire format."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ChatRequest(BaseModel):
+    session_id: str = "gateway"
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None = None
+    model: str | None = None
+
+
+class GuardRequestBody(BaseModel):
+    session_id: str = "gateway"
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardToolBody(BaseModel):
+    session_id: str = "gateway"
+    tool_name: str
+    arguments: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardResponseBody(BaseModel):
+    session_id: str = "gateway"
+    output: str
+    metadata: dict[str, Any] = Field(default_factory=dict)

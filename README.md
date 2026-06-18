@@ -1,93 +1,245 @@
-# Capstone
+# Aegis — Runtime Credential Defense for LLM Agents
 
+Aegis is an SDK-first security layer that sits between an LLM agent and the model/tools it
+calls. It inspects requests, model output, and **structured tool-call arguments**, scores
+exfiltration risk, and enforces configurable policy with auditable evidence — so credentials
+are harder to leak through prompt injection, encoded payloads, low-rate multi-turn drip, or
+tool-call arguments.
 
+> **Claim discipline.** This is a demo-grade capstone, not a production guarantee. The
+> leakage ledger is a cumulative *signal*, not a formal proof; the tool-call scanner covers a
+> scoped set of schemas; the ML probe is an auxiliary signal, never an authority. See
+> [Limitations](#limitations).
 
-## Getting started
+Gauntlet AI capstone. Full spec in [`PRD.md`](PRD.md) and
+[`AEGIS_TECHNICAL_PLAN.md`](AEGIS_TECHNICAL_PLAN.md); build contract in [`CLAUDE.md`](CLAUDE.md).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+---
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Why
 
-## Add your files
+Useful agents must read untrusted content, hold task context, and call tools — and
+credentials often live right next to attacker-controlled text. Indirect prompt injection can
+then steer an agent into revealing a secret directly, encoding it, leaking it slowly across
+turns, or placing it into a tool-call argument. Output-only text filters miss most of that
+surface. Aegis guards the **runtime path** where agents read context, call tools, and handle
+secrets.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## How it works
+
+Every guarded turn runs the same **Inspect → Score → Enforce** pipeline, then writes a
+redacted trace:
 
 ```
-cd existing_repo
-git remote add origin https://labs.gauntletai.com/jaygodfrey/capstone.git
-git branch -M main
-git push -uf origin main
+            guard_request / guard_tool_call / guard_response
+                              │
+              Inspect ────────┼──────── deterministic detectors + credential broker
+                              │
+              Score ──────────┼──────── Nimbus-lite cumulative leakage ledger
+                              │         (+ optional ML risk probe, non-authoritative)
+                              │
+              Enforce ────────┼──────── policy engine → ALLOW · WARN · SANITIZE · BLOCK · ESCALATE
+                              │
+              Trace ──────────┴──────── .aegis/traces/<session>.jsonl  (+ Braintrust if keyed)
 ```
 
-## Integrate with your tools
+The **SDK is the single source of truth** for security decisions — the eval harness and
+dashboard call it, never reimplementing the logic.
 
-* [Set up project integrations](https://labs.gauntletai.com/jaygodfrey/capstone/-/settings/integrations)
+## Quickstart
 
-## Collaborate with your team
+Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```bash
+uv sync --extra dev          # install
+uv run aegis-verify          # gate: ruff + pytest (offline, deterministic)
+uv run python -m examples.demo_agent   # baseline-vs-protected demo (live gpt-4o-mini or mock)
+uv run aegis-eval            # run the eval suite → evals/reports/
+uv run aegis-dashboard       # render dashboard/index.html (open in a browser)
+uv run aegis-gateway         # run the local service → http://127.0.0.1:8000
+```
 
-## Test and Deploy
+Configuration is optional — Aegis runs fully offline with sane defaults. To enable live
+features, copy `env.example` to `.env` (or `.env.local`) and set keys:
 
-Use the built-in continuous integration in GitLab.
+- `OPENAI_API_KEY` — live `gpt-4o-mini` provider (otherwise a deterministic mock is used)
+- `BRAINTRUST_API_KEY` — hosted traces/experiments (otherwise local JSONL only)
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+## SDK usage
 
-***
+```python
+from aegis import AegisClient
 
-# Editing this README
+aegis = AegisClient()  # loads policy.yaml + .env; defaults to "balanced" mode
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+# 1) Guard the request before calling the model
+decision = aegis.guard_request(messages, session_id="demo-1")
+if decision.action == "ALLOW":
+    output = llm.call(messages)
 
-## Suggestions for a good README
+    # 2) Guard structured tool calls before dispatch (the differentiator)
+    tool_decision = aegis.guard_tool_call("send_email", arguments, session_id="demo-1")
+    if tool_decision.action != "ALLOW":
+        ...  # blocked with structured evidence
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+    # 3) Guard model output before returning it
+    final = aegis.guard_response(output, session_id="demo-1")
+```
 
-## Name
-Choose a self-explaining name for your project.
+Every guard returns an `AegisDecision` (`action`, `risk_score`, `reasons`, `detector_hits`,
+`trace_id`). The decision contract and `AegisEvent` live in `src/aegis/contracts.py` — the
+typed seam every layer mirrors.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Run as a service (gateway)
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+`uv run aegis-gateway` starts a local FastAPI service that wraps the **same** SDK — apps can
+route through it instead of embedding `AegisClient`, and every call accumulates real traces
+(a live capture path the dashboard then reflects).
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /` | The dashboard, served live from current traces + eval metrics |
+| `GET /health` | Liveness + active policy mode, provider, Braintrust/ML-probe status |
+| `POST /v1/chat/completions` | Full proxy: guard request → provider → guard tool calls + response |
+| `POST /guard/request` · `/guard/tool_call` · `/guard/response` | Direct SDK guards over HTTP, return an `AegisDecision` |
+| `GET /api/decisions` | Recent decisions as JSON |
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set, else
+a deterministic mock. Host/port via `AEGIS_GATEWAY_HOST` / `AEGIS_GATEWAY_PORT`.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```bash
+curl -s localhost:8000/health
+curl -s -X POST localhost:8000/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"session_id":"demo","messages":[{"role":"user","content":"summarize the doc"}]}'
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Deploy (public, password-gated)
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+The gateway ships a `Dockerfile` and `render.yaml` for a public deploy. It is **gated by HTTP
+Basic Auth** — set `AEGIS_AUTH_USER` / `AEGIS_AUTH_PASSWORD` and the whole site requires a
+login (one browser prompt); leave them unset and it stays open for local dev. `/health` is
+always reachable for platform health checks, and POST endpoints are rate-limited per IP.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+**Render (blueprint):**
+1. Push the repo to GitHub.
+2. Render dashboard → **New → Blueprint** → select the repo (it reads `render.yaml`).
+3. Set the secret env vars (marked `sync: false`, never committed):
+   - `OPENAI_API_KEY` — your key; **server-side only**, never sent to the browser.
+   - `AEGIS_AUTH_USER`, `AEGIS_AUTH_PASSWORD` — the shared login you hand to graders.
+4. Deploy. Visit the URL → browser prompts for the login → dashboard, `/try`, and the API work.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+**Two different keys (don't conflate):** `OPENAI_API_KEY` is the *provider* credential (secret,
+host-only). The Basic Auth user/password is the *access* credential (what humans enter). Nobody
+ever types the OpenAI key into the site.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+> **Set a hard spend cap** on your OpenAI account before exposing the live model — Basic Auth
+> + rate limiting reduce abuse, but a billing cap is the real backstop.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Any Docker host works (`docker build -t aegis . && docker run -p 8000:8000 -e AEGIS_AUTH_USER=… aegis`).
+
+## Detectors
+
+| Detector | What it catches |
+| --- | --- |
+| `secret_pattern_scanner` | API keys, tokens, PEM blocks, connection strings (ignores `EXAMPLE`/placeholder values) |
+| `encoding_scanner` | base64 / hex / url / split-token credentials — decodes then re-scans |
+| `honeytoken_detector` | registered canaries leaking into output or tool args (egress-only) |
+| `tool_call_argument_scanner` | suspicious `send_email` / `http_request` / `query_database` args before dispatch |
+| `partial_leak_detector` | credential *fragments* — fuels drip detection without blocking alone |
+| `nimbus_lite_ledger` | per-session cumulative leakage; trips warn/block thresholds across turns |
+| `ml_risk_probe` *(optional)* | auxiliary PyTorch signal; WARN-capped, never authoritative |
+
+The **credential broker** resolves `secret://…` handles only inside trusted tool execution,
+and forces a non-allow decision (with redaction + a critical trace) if a raw secret ever
+appears in model-visible context.
+
+## Policy modes
+
+| Mode | Behavior |
+| --- | --- |
+| `observe` | Never blocks; records evidence and risk for baseline comparison. |
+| `balanced` | Blocks high-confidence leaks, canaries, tool-call exfiltration, budget exhaustion; warns on ambiguous cases. |
+| `strict` | Conservative — elevates most suspicious signals to a block. |
+
+Set via `AEGIS_POLICY_MODE` or `policy.yaml`. Rules are independent; the engine takes the
+most severe action.
+
+## Evaluation
+
+`uv run aegis-eval` runs 11 scripted scenarios across all 7 PRD categories (benign, encoded,
+multi-turn drip, tool-call exfiltration, canary touch, benign-handle, false-positive) through
+each policy mode and writes repeatable artifacts to `evals/reports/`
+(`summary.md`, `results.jsonl`, `metrics.json`).
+
+Headline result (**balanced** mode):
+
+| Metric | Value |
+| --- | --- |
+| attack detection rate | 1.0 |
+| benign allow rate | 1.0 |
+| benign false blocks | 0 |
+| evidence completeness | 1.0 |
+| avg latency / turn | < 1 ms |
+
+All four PRD success criteria pass: unsafe handled ≥ 0.8, benign allowed ≥ 0.8, tool-call
+injection blocked, honeytoken blocked. `observe` mode deliberately detects 0 (the baseline);
+`strict` blocks drip one turn earlier.
+
+## Optional ML risk probe
+
+A small PyTorch MLP scores normalized events as one extra signal. It is **never
+authoritative**: it caps its recommendation at WARN and degrades to a no-op (recorded in the
+trace) if torch or the model artifact is absent.
+
+```bash
+uv sync --extra ml
+uv run aegis-train-probe                 # → models/aegis_risk_probe.pt
+AEGIS_ENABLE_ML_PROBE=1 uv run aegis-eval # enable the probe as a signal
+```
+
+## Project structure
+
+```
+src/aegis/
+  contracts.py        # AegisEvent / AegisDecision / DetectorResult — the typed seam
+  client.py           # AegisClient — guard_request / guard_tool_call / guard_response
+  config.py           # settings: policy mode, thresholds, .env / .env.local loading
+  policy/             # policy engine + modes
+  detectors/          # patterns, encodings, honeytokens, tool_args, partial, nimbus
+    ml/               # optional risk probe (features, model, training)
+  secrets/            # credential broker + local fake store
+  providers/          # provider abstraction: mock + openai (gpt-4o-mini)
+  tracing.py          # local JSONL (+ optional Braintrust)
+  evals/              # YAML cases, runner, scorers, report, CLI
+  dashboard/          # static HTML console generator
+  gateway/            # FastAPI service over the SDK (proxy + guard endpoints + dashboard)
+examples/             # vulnerable_baseline.py vs demo_agent.py
+tests/                # the oracle — deterministic, offline, runs on the gate
+policy.yaml           # startup policy
+```
+
+## Development
+
+```bash
+uv run aegis-verify   # ruff + pytest (excludes live/networked tests) — the gate
+uv run pytest         # full test suite
+uv run ruff check .   # lint
+```
+
+The deterministic detectors and policy are unit-testable without any live provider. Live
+LLM, Braintrust, and the trained ML probe are exercised on demand, never on the gate.
+
+## Limitations
+
+- Demo-grade defense, **not** production-grade prevention of all credential exfiltration.
+- The tool-call scanner is scoped to `send_email`, `http_request`, `query_database`.
+- The Nimbus-lite ledger is a cumulative leakage *signal*, not a formal information-flow bound.
+- Cloud/API model support cannot provide white-box (CIFT-style) activation monitoring.
+- No production secret-manager, rotation, tenancy, RBAC, or persistence — the credential
+  store is a local fake (env vars or a JSON file).
+- A determined adaptive attacker may find paths around the MVP rules.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Capstone project — see repository for terms.

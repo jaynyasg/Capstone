@@ -1,0 +1,14 @@
+# Aegis policy — loaded at startup (PRD §6.6). Keep it small; no nested logic.
+mode: balanced  # observe | balanced | strict
+
+nimbus:
+  warn_threshold: 0.6
+  block_threshold: 1.0
+
+traces_dir: .aegis/traces
+
+# Optional ML risk probe (FR-14). One non-authoritative signal; deterministic detectors
+# remain authoritative for blocking. Requires the [ml] extra + a trained artifact.
+ml_probe:
+  enabled: false
+  path: models/aegis_risk_probe.pt

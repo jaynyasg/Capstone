@@ -1,0 +1,56 @@
+[project]
+name = "aegis"
+version = "0.1.0"
+description = "Runtime credential defense for LLM agents — SDK-backed security layer"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "openai>=1.40",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+braintrust = ["braintrust>=0.0.150"]
+ml = ["torch>=2.2"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+aegis-verify = "aegis.verify:main"
+aegis-eval = "aegis.evals.cli:main"
+aegis-dashboard = "aegis.dashboard.cli:main"
+aegis-train-probe = "aegis.detectors.ml.train:main"
+aegis-gateway = "aegis.gateway.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+# Live/networked tests are opt-in only; the Stop-hook gate runs offline.
+markers = [
+    "live: requires a real LLM provider / network (excluded from the offline verify gate)",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded HTML/CSS/JS template — long lines are intrinsic to the markup.
+"src/aegis/gateway/playground.py" = ["E501"]

@@ -1,0 +1,24 @@
+# Render blueprint for the Aegis gateway (password-gated, live gpt-4o-mini).
+# Deploy: push to GitHub, then New → Blueprint in the Render dashboard and point at this repo.
+# Set the `sync: false` secrets in the Render dashboard (they are NOT stored in git).
+services:
+  - type: web
+    name: aegis-gateway
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Live model — your OpenAI key. Server-side only; never sent to the browser.
+      - key: OPENAI_API_KEY
+        sync: false
+      # Password gate (HTTP Basic Auth). Share USER + PASSWORD with graders.
+      - key: AEGIS_AUTH_USER
+        sync: false
+      - key: AEGIS_AUTH_PASSWORD
+        sync: false
+      # Policy + abuse controls.
+      - key: AEGIS_POLICY_MODE
+        value: balanced
+      - key: AEGIS_RATE_LIMIT_PER_MIN
+        value: "30"
