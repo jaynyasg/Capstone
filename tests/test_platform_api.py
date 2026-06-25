@@ -124,3 +124,18 @@ def test_corrupt_source_surfaces_in_health_and_export(tmp_path) -> None:
 
     markdown = c.get("/api/platform/export", params={"format": "md"}).text
     assert "degraded" in markdown.lower()
+
+
+def test_overview_snapshot_is_cached_within_window(tmp_path) -> None:
+    c = _client(tmp_path)
+    _seed_block(c)
+
+    first = c.get("/api/platform/overview").json()
+    second = c.get("/api/platform/overview").json()
+    # Two rapid default requests reuse one snapshot (< 5s refresh window).
+    assert first["snapshot"]["generated_at"] == second["snapshot"]["generated_at"]
+    assert second["snapshot"]["freshness"] in {"live", "cached"}
+
+    # A filtered overview bypasses the cache and is freshly built.
+    filtered = c.get("/api/platform/overview", params={"session_id": "s1"}).json()
+    assert filtered["snapshot"]["freshness"] == "live"

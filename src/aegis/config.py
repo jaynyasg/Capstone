@@ -36,6 +36,10 @@ class Settings:
     # Operator-provided Fernet key for the durable canary vault. Absent means restart
     # detection is disabled (degraded) — we never silently mint a throwaway key (KTD13).
     canary_vault_key: str | None = None
+    # Overview snapshot cache windows (KTD9): rebuild after refresh seconds, label stale past
+    # stale seconds. Refresh 0 disables caching (every read rebuilds).
+    snapshot_refresh_seconds: float = 5.0
+    snapshot_stale_seconds: float = 60.0
 
     @property
     def platform_state_dir(self) -> Path:
@@ -85,4 +89,14 @@ class Settings:
             ),
             platform_dir=Path(platform_dir_env) if platform_dir_env else None,
             canary_vault_key=os.environ.get("AEGIS_CANARY_VAULT_KEY", data.get("canary_vault_key")),
+            snapshot_refresh_seconds=float(
+                os.environ.get(
+                    "AEGIS_SNAPSHOT_REFRESH_SECONDS", data.get("snapshot_refresh_seconds", 5.0)
+                )
+            ),
+            snapshot_stale_seconds=float(
+                os.environ.get(
+                    "AEGIS_SNAPSHOT_STALE_SECONDS", data.get("snapshot_stale_seconds", 60.0)
+                )
+            ),
         )

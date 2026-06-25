@@ -36,9 +36,31 @@ from aegis.gateway.models import (
 from aegis.gateway.playground import render_playground
 from aegis.platform import PlatformOverview, load_eval_metrics_with_health
 from aegis.platform.exports import collect_audit_bundle, render_markdown_bundle
+from aegis.platform.snapshots import SnapshotCache
 from aegis.platform.sqlite_store import SqliteEvidenceStore, build_overview_from_store, sync_store
-from aegis.platform.store import SCHEMA_VERSION, EvidenceHealth, EvidenceQuery, RecordWindow
+from aegis.platform.store import (
+    DEFAULT_LIMIT,
+    SCHEMA_VERSION,
+    EvidenceHealth,
+    EvidenceQuery,
+    RecordWindow,
+)
 from aegis.providers.base import Provider
+
+
+def _is_default_overview_query(query: EvidenceQuery) -> bool:
+    """Whether a query is the unfiltered default — the only shape the snapshot cache serves."""
+    return (
+        query.limit == DEFAULT_LIMIT
+        and query.offset == 0
+        and query.session_id is None
+        and query.action is None
+        and query.phase is None
+        and query.detector is None
+        and query.model_id is None
+        and query.since is None
+        and query.until is None
+    )
 
 _REFUSAL = "[blocked by Aegis: withheld]"
 
@@ -123,6 +145,12 @@ def create_app(
             reports_dir=DEFAULT_REPORTS_DIR,
             query=query or EvidenceQuery(),
         )
+
+    snapshot_cache = SnapshotCache(
+        builder=lambda: _platform_overview(EvidenceQuery()),
+        refresh_interval=settings.snapshot_refresh_seconds,
+        stale_after=settings.snapshot_stale_seconds,
+    )
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -228,6 +256,8 @@ def create_app(
         limit: int = 25, offset: int = 0, session_id: str | None = None
     ) -> dict[str, Any]:
         query = _query(limit=limit, offset=offset, session_id=session_id)
+        if _is_default_overview_query(query):
+            return snapshot_cache.get().model_dump()  # cached + freshness-labelled
         return _platform_overview(query).model_dump()
 
     @app.get("/api/platform/decisions")
@@ -315,7 +345,7 @@ def create_app(
         metrics = load_metrics(DEFAULT_REPORTS_DIR)
         cases = load_cases(DEFAULT_REPORTS_DIR)
         recent = load_recent_decisions(settings.traces_dir)
-        platform = _platform_overview()
+        platform = snapshot_cache.get()  # shares the cache + freshness with the API
         nav = (
             '<a href="/try" style="font-size:13px;color:#005ea2;margin-right:14px">'
             "Test console →</a>"
