@@ -66,6 +66,10 @@ features, copy `env.example` to `.env` (or `.env.local`) and set keys:
 
 - `OPENAI_API_KEY` — live `gpt-4o-mini` provider (otherwise a deterministic mock is used)
 - `BRAINTRUST_API_KEY` — hosted traces/experiments (otherwise local JSONL only)
+- `AEGIS_CANARY_VAULT_KEY` — Fernet key enabling durable (restart-safe) canary detection
+  (otherwise durable detection is disabled; see [Operating the platform](#operating-the-platform-local-state-backups-keys))
+- `AEGIS_SNAPSHOT_REFRESH_SECONDS` / `AEGIS_SNAPSHOT_STALE_SECONDS` — overview cache windows
+  (defaults 5s / 60s)
 
 ## SDK usage
 
@@ -129,7 +133,15 @@ route through it instead of embedding `AegisClient`, and every call accumulates 
 | `POST /cift/calibrate` | Record a model-specific CIFT/gateway calibration certificate |
 | `GET /api/cift/certifications` | Recent calibration certificates by hosted model |
 | `GET /api/decisions` | Recent decisions as JSON |
-| `GET /api/platform/overview` | Read-only platform evidence overview for dashboard/API consumers |
+| `GET /api/platform/overview` | Versioned platform evidence overview (schema version, query metadata, totals, health, freshness) |
+| `GET /api/platform/{decisions,sessions,detectors,canaries,cift}` | Bounded, versioned drilldowns — truthful totals + a latest window |
+| `GET /api/platform/health` | Evidence health: missing / unreadable / corrupt / partial / degraded warnings |
+| `GET /api/platform/export?format={json,md}` | Redacted audit bundle for a query scope — JSON for tooling, Markdown for review |
+
+Every `/api/platform/*` response carries a `schema_version` and echoes its query window. Read
+limits are bounded by default and clamped (negative/zero → default, excessive → ceiling), so a
+query string can never trigger an unbounded read. `total` always means all matching records;
+`latest` means the returned window.
 
 The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set, else
 a deterministic mock. Host/port via `AEGIS_GATEWAY_HOST` / `AEGIS_GATEWAY_PORT`.
@@ -148,6 +160,14 @@ Basic Auth** — set `AEGIS_AUTH_USER` / `AEGIS_AUTH_PASSWORD` and the whole sit
 login (one browser prompt); leave them unset and it stays open for local dev. `/health` is
 always reachable for platform health checks, and POST endpoints are rate-limited per IP.
 
+> **Basic Auth is demo-grade access control, not an identity system** (no users, roles,
+> tenancy, or sessions). It is a single shared password in front of **sensitive evidence**:
+> the dashboard, the platform drilldowns, and `/api/platform/export` expose redacted decisions,
+> detector evidence, session risk, safe canary metadata, and CIFT records. Redaction keeps raw
+> secrets and raw canary tokens out of that evidence, but anyone with the shared login can read
+> *what was blocked, when, and for which session*. Treat the deployed URL as a shared-secret
+> demo surface, not a multi-user console.
+
 **Render (blueprint):**
 1. Push the repo to GitHub.
 2. Render dashboard → **New → Blueprint** → select the repo (it reads `render.yaml`).
@@ -164,6 +184,42 @@ ever types the OpenAI key into the site.
 > + rate limiting reduce abuse, but a billing cap is the real backstop.
 
 Any Docker host works (`docker build -t aegis . && docker run -p 8000:8000 -e AEGIS_AUTH_USER=… aegis`).
+
+## Operating the platform (local state, backups, keys)
+
+All platform state is **local** under the `.aegis/` state root (gitignored) — there is no
+hosted database or external secret manager. Back up that directory to back up the platform.
+
+| Path | What it holds | Notes |
+| --- | --- | --- |
+| `.aegis/traces/<session>.jsonl` | Redacted guard events (source of truth) | Replayable; re-importable into the store |
+| `.aegis/cift/certifications.jsonl` | CIFT calibration certificates | Append-only JSONL |
+| `.aegis/platform/evidence.db` | SQLite bounded read model | Derived/rebuildable from the JSONL above |
+| `.aegis/platform/canary_vault.db` | Durable canary vault | Encrypted raw tokens + plaintext safe metadata |
+
+- **Backup / restore.** Copy the whole `.aegis/` directory. The evidence store
+  (`evidence.db`) is a rebuildable cache: if you keep the JSONL traces and CIFT records, the
+  store re-imports from them idempotently on the next read (delete `evidence.db` to force a
+  clean rebuild). The **canary vault is not rebuildable** from JSONL — its encrypted tokens
+  only exist in `canary_vault.db`, so back it up alongside the key.
+- **Canary vault key.** Durable canary detection requires an operator-provided key in
+  `AEGIS_CANARY_VAULT_KEY` (a [Fernet](https://cryptography.io/en/latest/fernet/) key:
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+  Aegis **never mints a throwaway key** — without a key, durable detection is simply disabled
+  and the registry stays in-memory only.
+- **Key loss is visible, not silent.** If the key is missing, wrong, or the vault is corrupt,
+  Aegis keeps the **safe canary metadata readable** (service, format, lifecycle, plant
+  location) and marks restart detection **degraded** in evidence health — it does not pretend
+  detection still works. Restore the correct key to recover; canaries planted while no key was
+  configured cannot be recovered for matching (plant new ones).
+- **Offline audit export.** A reviewer can produce a redacted bundle with no live services:
+
+  ```bash
+  curl -s 'localhost:8000/api/platform/export?format=md&session_id=demo-1' > audit.md   # human review
+  curl -s 'localhost:8000/api/platform/export?format=json&session_id=demo-1' > audit.json # tooling
+  ```
+
+  Both formats describe the same scope and contain no raw secrets or raw canary tokens.
 
 ## Detectors
 
@@ -221,10 +277,42 @@ audit trail. Teams can promote that evidence into new YAML eval cases, dashboard
 an offline ML-probe training run; production decisions remain deterministic and reviewable
 unless a new detector or policy change is explicitly shipped.
 
-The platform overview keeps that evidence local-file-backed for the capstone. It rolls up
-gateway/provider/policy status, recent decisions, eval success criteria, CIFT calibration
-records, safe honeytoken metadata, and Nimbus session risk into one read-only contract at
-`GET /api/platform/overview`, and the dashboard renders the same contract as a cockpit.
+The platform layer turns that evidence into one read-only contract the gateway API, the
+dashboard, and audit exports all consume — see [Production platform layer](#production-platform-layer-vnext).
+
+## Production platform layer (vNext)
+
+The capstone MVP (SDK guards, gateway, eval harness, dashboard) is described above. The
+**vNext platform layer** hardens the *evidence surfaces* around that same guard path so a
+security engineer can investigate and trust what they see — without changing detection or
+making the SDK any less the source of truth.
+
+What is implemented after this work:
+
+- **Bounded evidence read model.** Local JSONL traces, eval metrics, and CIFT records are
+  imported (idempotently, with redaction) into a local **SQLite** evidence store
+  (`stdlib sqlite3`, no hosted database). Reads use `COUNT(*)` totals and `LIMIT` windows, so
+  memory stays flat as evidence grows. Raw JSONL remains the replayable source of truth.
+- **Explicit evidence health.** Missing, unreadable, corrupt, or partially-imported sources
+  become structured warnings instead of silently degrading to empty — "no evidence" can no
+  longer masquerade as "nothing happened."
+- **Durable canaries.** Planted honeytokens are persisted to an encrypted local vault
+  (`cryptography` Fernet) so detection survives a process restart. Raw tokens are encrypted at
+  rest and only ever live in the in-process registry; evidence views show safe metadata only.
+- **Versioned platform API + audit exports.** `GET /api/platform/*` drilldowns and JSON/Markdown
+  export bundles carry a schema version, bounded query metadata, truthful totals, and preserved
+  redaction.
+- **Operator console.** The dashboard renders the platform contract directly (one evidence
+  source), shows health and live/cached/stale freshness next to the evidence they affect, and
+  offers drilldowns that link back into the platform API.
+- **Snapshot freshness.** Overview reads are cached for a short window (default 5s refresh, 60s
+  stale; configurable) and labelled live / cached / stale so repeated reads stay bounded and a
+  cached view never hides a degraded source.
+
+Still **out of scope** (unchanged non-goals): enterprise identity / SSO / RBAC / tenancy /
+billing, a production secret manager or credential rotation, a hosted multi-tenant database,
+and any formal credential-exfiltration *prevention* guarantee. Basic Auth remains **demo-grade**
+access control (see [Deploy](#deploy-public-password-gated)).
 
 ## CIFT calibration and certification
 
@@ -303,7 +391,8 @@ src/aegis/
     ml/               # optional risk probe (features, model, training)
   secrets/            # credential broker + local fake store
   providers/          # provider abstraction: mock + openai (gpt-4o-mini)
-  platform/           # local evidence overview for dashboard/API platform layer
+  platform/           # vNext evidence layer: contract, SQLite store, importers,
+                      #   durable canary vault, audit exports, snapshot cache
   tracing.py          # local JSONL (+ optional Braintrust)
   evals/              # YAML cases, runner, scorers, report, CLI
   dashboard/          # static HTML console generator
@@ -330,8 +419,12 @@ LLM, Braintrust, and the trained ML probe are exercised on demand, never on the 
 - The tool-call scanner is scoped to `send_email`, `http_request`, `query_database`.
 - The Nimbus-lite ledger is a cumulative leakage *signal*, not a formal information-flow bound.
 - Cloud/API model support cannot provide white-box (CIFT-style) activation monitoring.
-- No production secret-manager, rotation, tenancy, RBAC, or persistence — the credential
-  store is a local fake (env vars or a JSON file).
+- Platform state is **local**: SQLite evidence store + an encrypted local canary vault under
+  `.aegis/`. The vault's `cryptography`/Fernet encryption protects *canary tokens at rest* — it
+  is **not** a production secret manager. No credential rotation, hosted/multi-tenant database,
+  tenancy, or RBAC; the credential store remains a local fake (env vars or a JSON file).
+- Access control on a public deploy is **demo-grade Basic Auth** (a shared password), not an
+  identity system — no users, roles, tenancy, SSO, or billing.
 - A determined adaptive attacker may find paths around the MVP rules.
 
 ## License

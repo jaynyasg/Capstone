@@ -7,12 +7,15 @@ stack, boundaries, and the claim list that defines "done".
 
 ## Stack & tooling
 - Python ≥3.11, managed by **uv**. `uv sync` to install, `uv run <cmd>` to run.
-- pydantic v2 (contracts), FastAPI (gateway), Streamlit (dashboard), openai (provider).
+- pydantic v2 (contracts), FastAPI (gateway), static HTML (dashboard), openai (provider).
+- Platform vNext deps: stdlib `sqlite3` (local evidence read model), `cryptography` (canary vault).
 - Tests: **pytest**. Lint: **ruff**. Gate: `uv run aegis-verify` (offline, deterministic).
 - Layout: `src/aegis/` package, `tests/`, `examples/`, `policy.yaml`.
 
 ## Hard boundaries (non-goals — do NOT build)
-- No production secret manager / rotation / IAM. Local fake store (env or JSON) only.
+- No production secret manager / rotation / IAM. Local fake store (env or JSON) only. (The
+  canary vault's local `cryptography`/Fernet encryption protects canary tokens at rest — it is
+  NOT a secret manager; the key is operator-provided via `AEGIS_CANARY_VAULT_KEY`, never minted.)
 - No LLM-as-only-detector. Deterministic detectors are authoritative for blocking.
 - No PyTorch/CIFT as a hard dependency. ML probe is an optional *signal*, never the owner.
 - No CI/CD, no SaaS/tenancy/RBAC/billing. Local-run + Stop-hook gate is the safety net.
@@ -51,11 +54,22 @@ Each claim → its cheapest re-runnable check. `[ ]` = not yet green.
 - [x] C14 Static HTML dashboard shows recent decisions/detectors/risk/latency/mode. (FR-11) → `uv run aegis-dashboard`, src/aegis/dashboard/, tests/test_dashboard.py. Ship/Linear dark palette (ref: Week6/Week5 web app).
 - [x] C15 Optional PyTorch risk probe as one non-authoritative signal; WARN-capped; degrades gracefully. (FR-14) → src/aegis/detectors/ml/, tests/test_ml_*.py
 
+### Platform vNext (evidence layer — deterministic unit + integration tests, on the gate)
+- [x] C16 Versioned platform contract: bounded/clamped query, total-vs-latest windows, health distinguishing healthy-empty from missing/unreadable/corrupt. (R1/R3/R4/R5/R12/R15/R21) → src/aegis/platform/store.py, tests/test_platform_contracts.py + tests/test_platform.py
+- [x] C17 SQLite evidence store: idempotent redacted JSONL import, COUNT(*) totals + LIMIT windows, per-source import health; raw JSONL stays source of truth. (R2/R6/R13/R22) → src/aegis/platform/sqlite_store.py + importers.py, tests/test_platform_store.py
+- [x] C18 Durable canary vault: Fernet-encrypted tokens at rest, restart-safe exact+smeared detection; key-loss/corrupt rows degrade visibly (safe metadata stays, no raw token leaks). (R7-R11/R23/R29) → src/aegis/platform/canaries.py, tests/test_canary_persistence.py
+- [x] C19 Versioned platform API + drilldowns + JSON/Markdown audit exports; redaction preserved; bounded queries. (R12-R16/R24) → src/aegis/gateway/app.py + src/aegis/platform/exports.py, tests/test_platform_api.py
+- [x] C20 Snapshot cache with live/cached/stale freshness; cached reads never hide store/key-loss health. (R5/R6) → src/aegis/platform/snapshots.py, tests/test_snapshots.py
+- [x] C21 Operator dashboard renders the platform contract (no duplicate parsing); health/freshness/drilldowns/empty-state distinctions. (R17-R21/R25) → src/aegis/dashboard/render.py, tests/test_dashboard.py
+- [x] C22 Claim discipline: docs separate shipped MVP from vNext; Basic Auth demo-grade + evidence named; local-state backup/restore + canary key-loss recovery documented; offline gate stays deterministic. (R26-R30/SC1-SC6) → README.md, CLAUDE.md, architecture.md
+
 ## Run it (additions)
 - Eval: `uv run aegis-eval` → evals/reports/{summary.md,results.jsonl,metrics.json}
 - Dashboard: `uv run aegis-dashboard` → dashboard/index.html (open in browser; regenerate to refresh)
 - ML probe (optional): `uv sync --extra ml && uv run aegis-train-probe` → models/aegis_risk_probe.pt;
   enable via `AEGIS_ENABLE_ML_PROBE=1` or policy.yaml `ml_probe.enabled: true`. Absent torch/artifact → degraded (deterministic detectors authoritative).
+- Platform API: `uv run aegis-gateway` → `GET /api/platform/{overview,decisions,sessions,detectors,canaries,cift,health}` and `/api/platform/export?format={json,md}` (versioned, bounded, redacted). Local state under `.aegis/platform/` (evidence.db, canary_vault.db).
+- Durable canaries: set `AEGIS_CANARY_VAULT_KEY` (Fernet key) for restart-safe detection; absent/invalid key → in-memory only, health marks degraded (never silent).
 
 ## Run it
 - Tests/gate: `uv run aegis-verify`  ·  Live demo: `uv run python -m examples.demo_agent`

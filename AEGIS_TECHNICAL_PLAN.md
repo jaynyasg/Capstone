@@ -2,6 +2,14 @@
 
 Date: 2026-06-18
 
+> **vNext update (2026-06-25):** the "lightweight platform" described here has since been
+> hardened into a production-shaped **evidence layer** (bounded SQLite read model, durable
+> encrypted canary vault, versioned platform API + audit exports, operator console, snapshot
+> freshness). It does not change the SDK-as-source-of-truth design below. See `README.md`
+> (Production platform layer), `architecture.md` (Platform Evidence Layer), and
+> `docs/designs/aegis-production-platform-vnext.md`. Enterprise SSO/RBAC/tenancy/billing and a
+> production secret manager remain out of scope.
+
 Deliverable: A reasonable-scope technical plan for Aegis as an SDK, a lightweight platform, and an optional end-user environment plugin by June 29, 2026. The plan combines the Aegis papers, the Headroom proxy/SDK architecture, and the AgentForge eval/observability architecture while using Braintrust instead of Langfuse.
 
 ## Executive Decision

@@ -4,6 +4,14 @@ Status: PROMOTED
 Source: /plan-ceo-review on 2026-06-25
 Mode: Production Platform / Full Expansion
 
+> **Delivery status (2026-06-25):** all six accepted must-fixes are implemented and on the
+> offline verify gate — bounded SQLite evidence store + import health, durable encrypted
+> canary vault with restart-safe detection, operator console with drilldowns/health/freshness,
+> truthful total-vs-latest semantics, structured evidence health, and a vNext docs section
+> separating MVP from production claims. The accepted risk stands: identity remains demo-grade
+> Basic Auth. See `README.md` (Production platform layer) and `architecture.md`
+> (Platform Evidence Layer). Enterprise SSO/RBAC/tenancy/billing remain future work.
+
 ## Verdict
 
 Aegis is a strong capstone MVP and a credible seed for a production security
