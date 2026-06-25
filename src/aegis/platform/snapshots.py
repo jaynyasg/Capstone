@@ -35,31 +35,38 @@ class SnapshotCache:
         *,
         refresh_interval: float = 5.0,
         stale_after: float = 60.0,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self._builder = builder
         self._refresh_interval = max(0.0, refresh_interval)
         self._stale_after = stale_after
+        # ``clock`` drives age/refresh and must be monotonic, so a backward wall-clock step
+        # (NTP correction) can neither freeze the cache nor show a negative age. ``wall_clock``
+        # supplies only the human-readable ``generated_at`` instant.
         self._clock = clock
+        self._wall_clock = wall_clock
         self._cached: PlatformOverview | None = None
-        self._generated_at = 0.0
+        self._generated_at = 0.0  # monotonic reading at last build (for age/refresh)
+        self._generated_wall = 0.0  # wall-clock instant at last build (for display)
 
     def get(self) -> PlatformOverview:
         """Return the overview, rebuilding when the cache is empty or past its refresh window."""
         now = self._clock()
-        if self._cached is None or (now - self._generated_at) >= self._refresh_interval:
+        age = max(0.0, now - self._generated_at)  # clamp: monotonic should never regress
+        if self._cached is None or age >= self._refresh_interval:
             overview = self._builder()
             self._cached = overview
             self._generated_at = now
+            self._generated_wall = self._wall_clock()
             return overview.model_copy(
-                update={"snapshot": self._meta(now, FreshnessState.LIVE, 0.0)}
+                update={"snapshot": self._meta(self._generated_wall, FreshnessState.LIVE, 0.0)}
             )
-        age = now - self._generated_at
         freshness = FreshnessState.STALE if age >= self._stale_after else FreshnessState.CACHED
         # Reuse cached counts/windows but refresh only the freshness metadata. The cached
         # overview keeps its health, so warnings remain visible on a cached/stale read.
         return self._cached.model_copy(
-            update={"snapshot": self._meta(self._generated_at, freshness, age)}
+            update={"snapshot": self._meta(self._generated_wall, freshness, age)}
         )
 
     def invalidate(self) -> None:

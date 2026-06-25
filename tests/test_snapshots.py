@@ -62,7 +62,10 @@ def _counting_builder():
 def test_snapshot_reused_within_refresh_window() -> None:
     clock = _Clock()
     builder, state = _counting_builder()
-    cache = SnapshotCache(builder, refresh_interval=5.0, stale_after=60.0, clock=clock)
+    # One controllable clock for both roles keeps the displayed generated_at deterministic.
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
 
     first = cache.get()  # builds at t=0
     clock.now = 2.0
@@ -137,3 +140,48 @@ def test_disabled_cache_rebuilds_every_read() -> None:
     assert state["calls"] == 2  # deterministic: every read rebuilds
     assert first.snapshot.freshness is FreshnessState.LIVE
     assert second.snapshot.freshness is FreshnessState.LIVE
+
+
+def test_age_uses_monotonic_clock_and_never_negative_on_wall_clock_step_back() -> None:
+    # Age/refresh must key off a monotonic clock; a backward wall-clock step (e.g. NTP
+    # correction) must not yield a negative displayed age or a frozen cache.
+    mono = _Clock()
+    wall = _Clock()
+    wall.now = 100.0
+    builder, state = _counting_builder()
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=mono, wall_clock=wall
+    )
+
+    first = cache.get()  # mono=0, wall=100 -> LIVE
+    assert first.snapshot.generated_at == 100.0  # display timestamp is the wall clock
+
+    wall.now = 90.0  # wall clock steps backward 10s
+    mono.now = 2.0  # only 2s of real elapsed time
+    cached = cache.get()
+
+    assert state["calls"] == 1  # still within the refresh window
+    assert cached.snapshot.freshness is FreshnessState.CACHED
+    assert cached.snapshot.cache_age_seconds == 2.0  # from monotonic, not wall (-10 would be wrong)
+    assert cached.snapshot.cache_age_seconds >= 0.0  # never negative
+    assert cached.snapshot.generated_at == 100.0  # build timestamp unaffected by the step
+
+
+def test_refresh_keyed_on_monotonic_survives_wall_clock_step_back() -> None:
+    # Even if the wall clock jumps backward, once the monotonic age crosses the refresh
+    # interval the snapshot rebuilds (the old single-clock code would freeze forever).
+    mono = _Clock()
+    wall = _Clock()
+    wall.now = 100.0
+    builder, state = _counting_builder()
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=mono, wall_clock=wall
+    )
+
+    cache.get()  # mono=0 -> total 1
+    wall.now = 50.0  # wall clock steps far backward
+    mono.now = 6.0  # monotonic crosses the refresh interval
+    refreshed = cache.get()
+
+    assert state["calls"] == 2  # rebuilt despite the backward wall step
+    assert refreshed.snapshot.freshness is FreshnessState.LIVE
