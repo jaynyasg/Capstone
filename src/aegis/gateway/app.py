@@ -341,23 +341,19 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:
-        """Serve the dashboard live from current traces + eval metrics."""
-        metrics = load_metrics(DEFAULT_REPORTS_DIR)
+        """Serve the operator console from the shared platform contract (one evidence source)."""
         cases = load_cases(DEFAULT_REPORTS_DIR)
-        recent = load_recent_decisions(settings.traces_dir)
         platform = snapshot_cache.get()  # shares the cache + freshness with the API
         nav = (
             '<a href="/try" style="font-size:13px;color:#005ea2;margin-right:14px">'
             "Test console →</a>"
         )
-        # Served view re-reads traces every request; meta-refresh makes the feed live.
+        # The cache refreshes within its window; the meta-refresh keeps the feed live.
         return render_html(
-            metrics,
-            cases,
-            recent,
+            platform.model_dump(),
+            cases=cases,
             nav_html=nav,
             auto_refresh=5,
-            platform=platform.model_dump(),
         )
 
     @app.get("/try", response_class=HTMLResponse)

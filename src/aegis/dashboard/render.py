@@ -1,7 +1,14 @@
-"""Static dashboard generator — reads traces + eval metrics, emits one self-contained HTML.
+"""Operator console renderer — one self-contained HTML view of the platform contract.
 
-No server, no JS build: a single file styled to the Ship/Linear dark palette. Regenerate
-to refresh. All user/trace content is HTML-escaped at the seam.
+The dashboard is an *investigation* surface, not a second evidence parser (R20): every
+section is rendered from a single :class:`~aegis.platform.evidence.PlatformOverview` (the
+platform contract), whether that overview came from the gateway's SQLite store or from a
+static file-backed build. Health and freshness are shown next to the evidence they affect,
+empty states distinguish "nothing happened" from "evidence is unreadable", and drilldowns
+link back into the versioned platform API rather than re-parsing artifacts.
+
+No server, no JS build: a single file styled to the Ship/Linear dark palette. All
+trace/evidence content is HTML-escaped at the seam.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ from typing import Any
 
 from aegis.config import Settings
 from aegis.platform import collect_platform_overview
+from aegis.platform.store import FreshnessState
 
 DEFAULT_TRACES_DIR = Path(".aegis/traces")
 DEFAULT_REPORTS_DIR = Path("evals/reports")
@@ -34,12 +42,15 @@ h1{font-size:18px;font-weight:600;letter-spacing:-0.01em}
 .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
 .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#8a8a8a99;margin:28px 0 12px}
 .card{border:1px solid var(--border);background:var(--bg);border-radius:8px;padding:16px}
+.card.degraded{border-color:var(--block)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
 .kpi .v{font-size:24px;font-weight:600;letter-spacing:-0.02em}
 .kpi .k{font-size:12px;color:var(--muted);margin-top:2px}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:6px;background:var(--surface)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:5px 10px;border-radius:6px;background:var(--surface);text-decoration:none;color:var(--fg)}
+a.pill:hover{background:#262626}
 .dot{height:7px;width:7px;border-radius:999px;flex:none}
-.mode{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:3px 10px}
+.mode{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:3px 10px;margin-left:8px}
+.badge{font-size:11px;font-weight:600;border-radius:6px;padding:3px 9px;margin-left:8px}
 .hr{height:1px;background:var(--border);margin:28px 0}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;
@@ -60,6 +71,12 @@ tr:last-child td{border-bottom:none}
 .mini{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ok{color:var(--allow)} .bad{color:var(--block)}
 .empty{color:var(--muted);font-size:13px}
+.warn-row{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:6px 0;border-bottom:1px solid var(--border)}
+.warn-row:last-child{border-bottom:none}
+.sev{font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:4px;flex:none}
+.sev.error{color:var(--block);background:#f8514922}
+.sev.warning{color:var(--warn);background:#d2992222}
+.sev.info{color:var(--muted);background:#8a8a8a22}
 """
 
 _ACTION_COLOR = {
@@ -70,9 +87,22 @@ _ACTION_COLOR = {
     "ESCALATE": "var(--escalate)",
 }
 
+_FRESHNESS_COLOR = {
+    "live": "var(--allow)",
+    "cached": "var(--sanitize)",
+    "stale": "var(--warn)",
+    "static": "var(--muted)",
+}
+
 
 def _esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return value.model_dump() if hasattr(value, "model_dump") else dict(value)
 
 
 def load_recent_decisions(traces_dir: Path | str, limit: int = 25) -> list[dict[str, Any]]:
@@ -122,11 +152,11 @@ def _action_pill(action: str) -> str:
 
 def _kpis(m: dict[str, Any]) -> str:
     cells = [
-        ("attack detection", f"{m['attack_detection_rate']:.0%}"),
-        ("benign allowed", f"{m['benign_allow_rate']:.0%}"),
-        ("false blocks", str(m["benign_false_blocks"])),
-        ("evidence complete", f"{m['evidence_completeness']:.0%}"),
-        ("avg latency", f"{m['avg_latency_ms']:.2f} ms"),
+        ("attack detection", f"{m.get('attack_detection_rate', 0):.0%}"),
+        ("benign allowed", f"{m.get('benign_allow_rate', 0):.0%}"),
+        ("false blocks", str(m.get("benign_false_blocks", 0))),
+        ("evidence complete", f"{m.get('evidence_completeness', 0):.0%}"),
+        ("avg latency", f"{m.get('avg_latency_ms', 0):.2f} ms"),
     ]
     items = "".join(
         f'<div class="card kpi"><div class="v">{_esc(v)}</div><div class="k">{_esc(k)}</div></div>'
@@ -137,10 +167,10 @@ def _kpis(m: dict[str, Any]) -> str:
 
 def _criteria(m: dict[str, Any]) -> str:
     rows = []
-    for name, ok in m["success_criteria"].items():
+    for name, ok in m.get("success_criteria", {}).items():
         mark = '<span class="ok">PASS</span>' if ok else '<span class="bad">FAIL</span>'
         rows.append(f"<div>{mark} &nbsp; {_esc(name)}</div>")
-    return f'<div class="card crit">{"".join(rows)}</div>'
+    return f'<div class="card crit">{"".join(rows)}</div>' if rows else _note("No success criteria.")
 
 
 def _baseline_table(cases: list[dict[str, Any]]) -> str:
@@ -175,46 +205,113 @@ def _distribution(m: dict[str, Any]) -> str:
     return "".join(rows)
 
 
-def _decisions(rows: list[dict[str, Any]]) -> str:
+def _note(text: str) -> str:
+    return f'<div class="card empty">{_esc(text)}</div>'
+
+
+def _freshness_badge(snapshot: dict[str, Any]) -> str:
+    state = str(snapshot.get("freshness", "live"))
+    color = _FRESHNESS_COLOR.get(state, "var(--muted)")
+    age = snapshot.get("cache_age_seconds", 0.0) or 0.0
+    label = state if state in ("live", "static") else f"{state} · {age:.0f}s"
+    return (
+        f'<span class="badge" style="color:{color};border:1px solid {color}55">'
+        f"{_esc(label)}</span>"
+    )
+
+
+def _health_panel(health: dict[str, Any]) -> str:
+    status = str(health.get("status", "healthy"))
+    warnings = health.get("warnings", [])
+    if status == "healthy" and not warnings:
+        return '<div class="card"><span class="ok">healthy</span> &nbsp;'\
+               '<span class="empty">all evidence sources readable and current.</span></div>'
+    rows = "".join(
+        f'<div class="warn-row"><span class="sev {_esc(w.get("severity", "warning"))}">'
+        f'{_esc(w.get("severity", "warning"))}</span>'
+        f'<span class="mono">{_esc(w.get("source_kind", "?"))} / '
+        f'{_esc(w.get("warning_type", "?"))}</span>'
+        f'<span class="det">{_esc(w.get("detail", ""))}</span></div>'
+        for w in warnings
+    )
+    return f'<div class="card degraded"><div class="det">status: {_esc(status)}</div>{rows}</div>'
+
+
+def _degraded_sources(health: dict[str, Any]) -> set[str]:
+    return {str(w.get("source_kind")) for w in health.get("warnings", [])}
+
+
+def _decisions(decisions: dict[str, Any], health: dict[str, Any]) -> str:
+    rows = decisions.get("recent", [])
     if not rows:
+        # Distinguish a genuinely empty (healthy) feed from one degraded by unreadable evidence.
+        if "traces" in _degraded_sources(health) or health.get("status") == "degraded":
+            return (
+                '<div class="card empty">No <strong>readable</strong> decisions — trace '
+                "evidence may be missing or unreadable (see evidence health above).</div>"
+            )
         return (
-            '<div class="card empty">No decisions yet — run '
+            '<div class="card empty">No decisions recorded yet — run '
             '<span class="mono">python -m examples.demo_agent</span> or '
             '<span class="mono">aegis-eval</span>.</div>'
         )
     out = []
     for r in rows:
-        decision = r.get("policy_decision") or {}
-        action = decision.get("action", "ALLOW")
-        fired = [
-            h["detector_name"]
-            for h in decision.get("detector_hits", [])
-            if h.get("recommended_action") not in (None, "ALLOW")
-        ]
+        action = r.get("action", "ALLOW")
+        fired = [name for name in r.get("detectors", [])]
         phase = r.get("phase", "?")
         tool = f" · {_esc(r['tool_name'])}" if r.get("tool_name") else ""
         det = f'<span class="det">{_esc(", ".join(dict.fromkeys(fired)))}</span>' if fired else ""
-        summary = _esc((r.get("input_summary") or "")[:90])
+        summary = _esc((r.get("summary") or "")[:90])
         out.append(
             f'<div class="decision">{_action_pill(action)}'
             f'<span class="mono">{_esc(phase)}{tool}</span>'
             f'<span style="flex:1;color:var(--muted);font-size:12px">{summary}</span>{det}</div>'
         )
-    return f'<div class="card">{"".join(out)}</div>'
+    label = f'<div class="det">total matching: {_esc(decisions.get("total", len(rows)))} · '\
+            f'showing latest {len(rows)}</div>'
+    return f'<div class="card">{label}{"".join(out)}</div>'
 
 
-def _platform(platform: Any | None) -> str:
-    if platform is None:
-        return '<div class="card empty">Platform evidence overview is not loaded.</div>'
-    data = platform.model_dump() if hasattr(platform, "model_dump") else dict(platform)
-    status = data.get("status", {})
+def _drilldowns(data: dict[str, Any]) -> str:
+    """Operator filters as links back into the versioned platform API (never a re-parse)."""
+    sessions = data.get("sessions", [])
     decisions = data.get("decisions", {})
+    by_action = decisions.get("by_action", {})
+    by_phase = decisions.get("by_phase", {})
+    detector_hits = decisions.get("detector_hits", {})
+    cift = data.get("cift", {})
+
+    def _links(items: list[tuple[str, Any]], param: str, endpoint: str = "decisions") -> str:
+        cells = "".join(
+            f'<a class="pill" href="/api/platform/{endpoint}?{param}={_esc(key)}">'
+            f"{_esc(key)}{'' if value is None else f' · {_esc(value)}'}</a>"
+            for key, value in items
+        )
+        return cells or '<span class="empty">none</span>'
+
+    session_items = [(s.get("session_id"), s.get("latest_action")) for s in sessions[:8]]
+    model_items = [
+        (row.get("model_id"), row.get("status"))
+        for row in cift.get("latest", [])
+        if row.get("model_id")
+    ]
+    return f"""
+<div class="split">
+  <div class="card"><div class="det">By session</div><div class="mini">{_links(session_items, "session_id")}</div></div>
+  <div class="card"><div class="det">By action</div><div class="mini">{_links(list(by_action.items()), "action")}</div></div>
+  <div class="card"><div class="det">By phase</div><div class="mini">{_links(list(by_phase.items()), "phase")}</div></div>
+  <div class="card"><div class="det">By detector</div><div class="mini">{_links(list(detector_hits.items()), "detector")}</div></div>
+  <div class="card"><div class="det">By model / certificate</div><div class="mini">{_links(model_items, "model_id", "cift")}</div></div>
+</div>
+"""
+
+
+def _platform(data: dict[str, Any]) -> str:
+    status = data.get("status", {})
     canaries = data.get("canaries", {})
     cift = data.get("cift", {})
     sessions = data.get("sessions", [])
-    evals = data.get("evals", {})
-    headline = evals.get("balanced", {}) if isinstance(evals, dict) else {}
-    success = headline.get("success_criteria", {}) if isinstance(headline, dict) else {}
 
     status_rows = "".join(
         f'<div class="kv"><span>{_esc(k)}</span><strong>{_esc(v)}</strong></div>'
@@ -224,13 +321,6 @@ def _platform(platform: Any | None) -> str:
             "ML probe": "on" if status.get("ml_probe") else "off",
             "Braintrust": "on" if status.get("braintrust") else "off",
         }.items()
-    )
-    decision_rows = (
-        "".join(
-            f'<span class="pill">{_esc(k)}: {_esc(v)}</span>'
-            for k, v in (decisions.get("by_action") or {}).items()
-        )
-        or '<span class="empty">No decisions</span>'
     )
     canary_rows = (
         "".join(
@@ -253,45 +343,40 @@ def _platform(platform: Any | None) -> str:
         )
         or '<div class="empty">No session risk yet</div>'
     )
-    criteria_rows = (
-        "".join(
-            f'<span class="pill">{_esc(name)}: {"PASS" if ok else "FAIL"}</span>'
-            for name, ok in success.items()
-        )
-        or '<span class="empty">No eval criteria</span>'
-    )
-
     return f"""
 <div class="split">
   <div class="card"><div class="det">Runtime</div>{status_rows}</div>
-  <div class="card"><div class="det">Decisions</div><div class="mini">{decision_rows}</div></div>
   <div class="card"><div class="det">Honeytoken formats</div><div class="mini">{canary_rows}</div></div>
   <div class="card"><div class="det">CIFT certificates</div><div class="kv"><span>latest</span><strong>{_esc(cift_label)}</strong></div><div class="kv"><span>total</span><strong>{_esc(cift.get("total", 0))}</strong></div></div>
   <div class="card"><div class="det">Session risk</div>{session_rows}</div>
-  <div class="card"><div class="det">Eval criteria</div><div class="mini">{criteria_rows}</div></div>
 </div>
 """
 
 
 def render_html(
-    metrics: dict[str, Any] | None,
-    cases: list[dict[str, Any]],
-    decisions: list[dict[str, Any]],
+    platform: Any | None,
+    *,
+    cases: list[dict[str, Any]] | None = None,
     headline: str = "balanced",
     nav_html: str = "",
     auto_refresh: int = 0,
-    platform: Any | None = None,
 ) -> str:
-    m = (metrics or {}).get(headline)
-    mode_badge = f'{nav_html}<span class="mode">policy: {_esc(headline)}</span>'
+    """Render the operator console from a single platform contract (overview)."""
+    data = _as_dict(platform)
+    snapshot = data.get("snapshot", {})
+    health = data.get("health", {})
+    decisions = data.get("decisions", {})
+    evals = data.get("evals", {})
+    cases = cases or []
+    m = evals.get(headline) if isinstance(evals, dict) else None
+
+    mode_badge = f'{nav_html}{_freshness_badge(snapshot)}<span class="mode">policy: {_esc(headline)}</span>'
     refresh_meta = f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ""
 
     if m:
-        kpis = _kpis(m)
-        criteria = _criteria(m)
-        distribution = _distribution(m)
+        kpis, criteria, distribution = _kpis(m), _criteria(m), _distribution(m)
     else:
-        note = '<div class="card empty">Run <span class="mono">aegis-eval</span> to populate metrics.</div>'
+        note = _note("Run aegis-eval to populate metrics.")
         kpis = criteria = distribution = note
 
     return f"""<!doctype html>
@@ -300,11 +385,20 @@ def render_html(
 <title>Aegis — Credential Defense Console</title>
 <style>{_CSS}</style></head>
 <body>
-<header><h1>Aegis</h1>{mode_badge}</header>
-<div class="sub">Runtime credential defense for LLM agents — decisions, evidence, and eval results.</div>
+<header><h1>Aegis</h1><div>{mode_badge}</div></header>
+<div class="sub">Operator console — what happened, what changed, what evidence is degraded, what to export.</div>
+
+<div class="label">Evidence health</div>
+{_health_panel(health)}
+
+<div class="label">Investigate (drilldowns → platform API)</div>
+{_drilldowns(data)}
 
 <div class="label">Platform cockpit</div>
-{_platform(platform)}
+{_platform(data)}
+
+<div class="label">Recent decisions</div>
+{_decisions(decisions, health)}
 
 <div class="label">Eval summary ({_esc(headline)})</div>
 {kpis}
@@ -318,11 +412,8 @@ def render_html(
 <div class="label">Detector hit distribution</div>
 <div class="card">{distribution}</div>
 
-<div class="label">Recent decisions</div>
-{_decisions(decisions)}
-
 <div class="hr"></div>
-<div class="empty">Generated by <span class="mono">aegis-dashboard</span> — static snapshot. Regenerate to refresh.</div>
+<div class="empty">Generated by <span class="mono">aegis-dashboard</span> — export an audit bundle at <span class="mono">/api/platform/export?format=md</span>.</div>
 </body></html>
 """
 
@@ -357,23 +448,27 @@ def generate(
     out: Path | str = DEFAULT_OUT,
     headline: str = "balanced",
 ) -> Path:
+    """Build a static snapshot of the operator console from local evidence.
+
+    Static generation embeds a generated timestamp and the source health, and marks the
+    snapshot ``static`` rather than promising a live refresh (KTD9).
+    """
     traces_path = Path(traces_dir)
     reports_path = Path(reports_dir)
-    metrics = load_metrics(reports_dir)
     cases = load_cases(reports_dir, headline)
-    decisions = load_recent_decisions(traces_dir)
-    platform = collect_platform_overview(
+    overview = collect_platform_overview(
         settings=Settings(traces_dir=traces_path),
         provider_name="static",
         braintrust_enabled=False,
         ml_probe_available=False,
         reports_dir=reports_path,
-        metrics=metrics,
     )
+    overview.snapshot.freshness = FreshnessState.STATIC
+    overview.snapshot.refresh_source = "static"
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        render_html(metrics, cases, decisions, headline, platform=platform.model_dump()),
+        render_html(overview.model_dump(), cases=cases, headline=headline),
         encoding="utf-8",
     )
     return out_path
