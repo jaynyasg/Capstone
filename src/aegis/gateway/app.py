@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from fastapi.responses import HTMLResponse
 
 from aegis.cift import CiftCalibrationRequest, CiftCertificationStore, calibrate_model
@@ -34,10 +34,24 @@ from aegis.gateway.models import (
     PlantCanaryBody,
 )
 from aegis.gateway.playground import render_playground
-from aegis.platform import PlatformOverview, collect_platform_overview
+from aegis.platform import PlatformOverview, load_eval_metrics_with_health
+from aegis.platform.exports import collect_audit_bundle, render_markdown_bundle
+from aegis.platform.sqlite_store import SqliteEvidenceStore, build_overview_from_store, sync_store
+from aegis.platform.store import SCHEMA_VERSION, EvidenceHealth, EvidenceQuery, RecordWindow
 from aegis.providers.base import Provider
 
 _REFUSAL = "[blocked by Aegis: withheld]"
+
+
+def _window_response(kind: str, window: RecordWindow) -> dict[str, Any]:
+    """Versioned drilldown envelope: schema version + query metadata + truthful total."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": kind,
+        "query": window.query.model_dump(),
+        "total": window.total,
+        "latest": window.latest,
+    }
 
 
 def _build_provider() -> Provider:
@@ -64,21 +78,50 @@ def create_app(
     cift_store = CiftCertificationStore(
         settings.traces_dir.parent / "cift" / "certifications.jsonl"
     )
+    store = SqliteEvidenceStore(settings.evidence_db_path)
 
     app = FastAPI(title="Aegis Gateway", version="0.1.0")
 
-    def _platform_overview(limit: int = 25) -> PlatformOverview:
-        metrics = load_metrics(DEFAULT_REPORTS_DIR)
-        return collect_platform_overview(
+    def _query(
+        limit: int = 25,
+        offset: int = 0,
+        session_id: str | None = None,
+        action: str | None = None,
+        phase: str | None = None,
+        detector: str | None = None,
+        model_id: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> EvidenceQuery:
+        # EvidenceQuery clamps unsafe limits/offsets, so every platform endpoint bounds reads
+        # consistently regardless of the query string the caller sent.
+        return EvidenceQuery(
+            limit=limit,
+            offset=offset,
+            session_id=session_id,
+            action=action,
+            phase=phase,
+            detector=detector,
+            model_id=model_id,
+            since=since,
+            until=until,
+        )
+
+    def _sync_store() -> None:
+        sync_store(store, settings, canaries=client.registry.safe_records())
+
+    def _platform_overview(query: EvidenceQuery | None = None) -> PlatformOverview:
+        return build_overview_from_store(
+            store=store,
             settings=settings,
             provider_name=provider.name,
             braintrust_enabled=client.tracer.braintrust_enabled,
             ml_probe_available=client.ml_probe.available if client.ml_probe else False,
             canaries=client.registry.safe_records(),
-            certifications=cift_store.list(limit=limit),
+            metrics=load_metrics(DEFAULT_REPORTS_DIR),
+            extra_warnings=client.registry.health_warnings(),
             reports_dir=DEFAULT_REPORTS_DIR,
-            metrics=metrics,
-            decision_limit=limit,
+            query=query or EvidenceQuery(),
         )
 
     @app.get("/health")
@@ -181,8 +224,90 @@ def create_app(
         return {"decisions": load_recent_decisions(settings.traces_dir, limit)}
 
     @app.get("/api/platform/overview")
-    def platform_overview(limit: int = 25) -> dict[str, Any]:
-        return _platform_overview(limit).model_dump()
+    def platform_overview(
+        limit: int = 25, offset: int = 0, session_id: str | None = None
+    ) -> dict[str, Any]:
+        query = _query(limit=limit, offset=offset, session_id=session_id)
+        return _platform_overview(query).model_dump()
+
+    @app.get("/api/platform/decisions")
+    def platform_decisions(
+        limit: int = 25,
+        offset: int = 0,
+        session_id: str | None = None,
+        action: str | None = None,
+        phase: str | None = None,
+        detector: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> dict[str, Any]:
+        _sync_store()
+        query = _query(
+            limit=limit,
+            offset=offset,
+            session_id=session_id,
+            action=action,
+            phase=phase,
+            detector=detector,
+            since=since,
+            until=until,
+        )
+        return _window_response("decisions", store.decisions(query))
+
+    @app.get("/api/platform/sessions")
+    def platform_sessions(limit: int = 25, offset: int = 0) -> dict[str, Any]:
+        _sync_store()
+        return _window_response("sessions", store.sessions(_query(limit=limit, offset=offset)))
+
+    @app.get("/api/platform/detectors")
+    def platform_detectors(limit: int = 25, offset: int = 0) -> dict[str, Any]:
+        _sync_store()
+        return _window_response("detectors", store.detectors(_query(limit=limit, offset=offset)))
+
+    @app.get("/api/platform/canaries")
+    def platform_canaries(
+        limit: int = 25, offset: int = 0, session_id: str | None = None
+    ) -> dict[str, Any]:
+        _sync_store()
+        query = _query(limit=limit, offset=offset, session_id=session_id)
+        return _window_response("canaries", store.canaries(query))
+
+    @app.get("/api/platform/cift")
+    def platform_cift(
+        limit: int = 25, offset: int = 0, model_id: str | None = None
+    ) -> dict[str, Any]:
+        _sync_store()
+        query = _query(limit=limit, offset=offset, model_id=model_id)
+        return _window_response("cift", store.cift(query))
+
+    @app.get("/api/platform/health")
+    def platform_health() -> dict[str, Any]:
+        _sync_store()
+        _, metrics_warnings = load_eval_metrics_with_health(DEFAULT_REPORTS_DIR)
+        health = EvidenceHealth.from_warnings(
+            store.health().warnings + metrics_warnings + client.registry.health_warnings()
+        )
+        return {"schema_version": SCHEMA_VERSION, **health.model_dump()}
+
+    @app.get("/api/platform/export")
+    def platform_export(
+        fmt: str = Query("json", alias="format"),
+        limit: int = 200,
+        offset: int = 0,
+        session_id: str | None = None,
+        action: str | None = None,
+        phase: str | None = None,
+    ) -> Any:
+        query = _query(
+            limit=limit, offset=offset, session_id=session_id, action=action, phase=phase
+        )
+        overview = _platform_overview(query)
+        bundle = collect_audit_bundle(overview=overview, store=store, query=query)
+        if fmt.lower() in ("md", "markdown"):
+            return Response(
+                render_markdown_bundle(bundle), media_type="text/markdown; charset=utf-8"
+            )
+        return bundle
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:

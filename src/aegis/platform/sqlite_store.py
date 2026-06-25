@@ -336,12 +336,16 @@ class SqliteEvidenceStore:
 
     def canaries(self, query: EvidenceQuery | None = None) -> RecordWindow:
         query = query or EvidenceQuery()
+        clause = " WHERE session_id=?" if query.session_id else ""
+        params: tuple[Any, ...] = (query.session_id,) if query.session_id else ()
         with self._connect() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM canary_records").fetchone()[0]
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM canary_records{clause}", params
+            ).fetchone()[0]
             rows = conn.execute(
-                "SELECT * FROM canary_records ORDER BY planted_at DESC, canary_id DESC "
-                "LIMIT ? OFFSET ?",
-                (query.limit, query.offset),
+                f"SELECT * FROM canary_records{clause} "
+                "ORDER BY planted_at DESC, canary_id DESC LIMIT ? OFFSET ?",
+                (*params, query.limit, query.offset),
             ).fetchall()
             latest = [_canary_dict(row) for row in rows]
         return RecordWindow(total=total, latest=latest, query=query)
@@ -522,6 +526,34 @@ def _json_or_empty(value: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def sync_store(
+    store: SqliteEvidenceStore,
+    settings: Settings,
+    *,
+    certifications: list[Any] | None = None,
+    canaries: list[Any] | None = None,
+) -> None:
+    """Idempotently import local artifacts into ``store`` (traces, CIFT, canaries).
+
+    Shared by the overview builder and the drilldown endpoints so reads always see the same
+    imported state. Raw JSONL remains the source of truth; re-importing is a cheap no-op.
+    """
+    from aegis.platform.importers import (
+        import_canary_records,
+        import_cift_jsonl,
+        import_cift_records,
+        import_trace_events,
+    )
+
+    import_trace_events(store, settings.traces_dir)
+    if certifications is not None:
+        import_cift_records(store, certifications)
+    else:
+        import_cift_jsonl(store, settings.traces_dir.parent / "cift" / "certifications.jsonl")
+    if canaries is not None:
+        import_canary_records(store, canaries)
+
+
 def build_overview_from_store(
     *,
     store: SqliteEvidenceStore,
@@ -533,36 +565,22 @@ def build_overview_from_store(
     canaries: list[Any] | None = None,
     certifications: list[Any] | None = None,
     metrics: dict[str, Any] | None = None,
+    extra_warnings: list[HealthWarning] | None = None,
     query: EvidenceQuery | None = None,
 ) -> PlatformOverview:
     """Import local artifacts into ``store`` (idempotently) and assemble a PlatformOverview.
 
     Mirrors :func:`aegis.platform.evidence.collect_platform_overview` but serves the bounded
     read model instead of eager in-memory aggregation. The store owns row evidence (decisions,
-    CIFT, canaries, sessions, import health); this assembler adds runtime status and eval
-    metrics, which the store does not own.
+    CIFT, canaries, sessions, import health); this assembler adds runtime status, eval metrics,
+    and ``extra_warnings`` (e.g. durable-canary key-loss health), which the store does not own.
     """
-    from aegis.platform.importers import (
-        import_canary_records,
-        import_cift_jsonl,
-        import_cift_records,
-        import_trace_events,
-    )
-
     if query is None:
         query = EvidenceQuery()
     reports_path = Path(reports_dir)
-
-    import_trace_events(store, settings.traces_dir)
-
     cift_path = settings.traces_dir.parent / "cift" / "certifications.jsonl"
-    if certifications is not None:
-        import_cift_records(store, certifications)
-    else:
-        import_cift_jsonl(store, cift_path)
 
-    if canaries is not None:
-        import_canary_records(store, canaries)
+    sync_store(store, settings, certifications=certifications, canaries=canaries)
 
     if metrics is not None:
         eval_metrics: dict[str, Any] | None = metrics
@@ -570,7 +588,9 @@ def build_overview_from_store(
     else:
         eval_metrics, metrics_warnings = load_eval_metrics_with_health(reports_path)
 
-    health = EvidenceHealth.from_warnings(store.health().warnings + metrics_warnings)
+    health = EvidenceHealth.from_warnings(
+        store.health().warnings + metrics_warnings + list(extra_warnings or [])
+    )
 
     return PlatformOverview(
         schema_version=SCHEMA_VERSION,
