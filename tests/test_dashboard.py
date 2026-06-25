@@ -16,8 +16,12 @@ SAMPLE_METRICS = {
     }
 }
 SAMPLE_CASES = [
-    {"id": "tool-email-001", "category": "tool_call_exfiltration", "baseline_leaked": True,
-     "worst_action": "BLOCK"},
+    {
+        "id": "tool-email-001",
+        "category": "tool_call_exfiltration",
+        "baseline_leaked": True,
+        "worst_action": "BLOCK",
+    },
 ]
 SAMPLE_DECISIONS = [
     {
@@ -33,6 +37,27 @@ SAMPLE_DECISIONS = [
         },
     }
 ]
+SAMPLE_PLATFORM = {
+    "status": {
+        "gateway": "ok",
+        "provider": "mock",
+        "policy_mode": "balanced",
+        "braintrust": False,
+        "ml_probe": False,
+    },
+    "decisions": {"total": 1, "by_action": {"BLOCK": 1}, "by_phase": {"tool_call": 1}},
+    "evals": {
+        "balanced": {
+            "attack_detection_rate": 1.0,
+            "benign_allow_rate": 1.0,
+            "success_criteria": {"honeytoken_blocked": True},
+        }
+    },
+    "cift": {"total": 1, "latest": [{"model_id": "llama-local", "level": "gateway_calibrated"}]},
+    "canaries": {"total": 1, "by_format": {"github-ghp": 1}, "latest": []},
+    "sessions": [{"session_id": "s1", "nimbus_cumulative_score": 1.0, "events": 3}],
+    "evidence_paths": {"traces": ".aegis/traces", "evals": "evals/reports"},
+}
 
 
 def test_renders_core_sections() -> None:
@@ -45,9 +70,25 @@ def test_renders_core_sections() -> None:
     assert "tool_call_argument_scanner" in html  # detector distribution + fired
 
 
+def test_renders_platform_cockpit() -> None:
+    html = render_html(SAMPLE_METRICS, SAMPLE_CASES, SAMPLE_DECISIONS, platform=SAMPLE_PLATFORM)
+
+    assert "Platform cockpit" in html
+    assert "provider" in html
+    assert "mock" in html
+    assert "CIFT certificates" in html
+    assert "github-ghp" in html
+    assert "s1" in html
+
+
 def test_escapes_decision_content() -> None:
-    rows = [{"phase": "response", "input_summary": "<script>alert(1)</script>",
-             "policy_decision": {"action": "ALLOW", "detector_hits": []}}]
+    rows = [
+        {
+            "phase": "response",
+            "input_summary": "<script>alert(1)</script>",
+            "policy_decision": {"action": "ALLOW", "detector_hits": []},
+        }
+    ]
     html = render_html(SAMPLE_METRICS, [], rows)
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html

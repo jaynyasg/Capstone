@@ -11,6 +11,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from aegis.config import Settings
+from aegis.platform import collect_platform_overview
+
 DEFAULT_TRACES_DIR = Path(".aegis/traces")
 DEFAULT_REPORTS_DIR = Path("evals/reports")
 DEFAULT_OUT = Path("dashboard/index.html")
@@ -51,6 +54,10 @@ tr:last-child td{border-bottom:none}
 .det{font-size:12px;color:var(--muted)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted)}
 .crit{display:flex;flex-direction:column;gap:8px}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:13px;margin:5px 0}
+.kv span:first-child{color:var(--muted)}
+.mini{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ok{color:var(--allow)} .bad{color:var(--block)}
 .empty{color:var(--muted);font-size:13px}
 """
@@ -74,14 +81,20 @@ def load_recent_decisions(traces_dir: Path | str, limit: int = 25) -> list[dict[
         return []
     rows: list[dict[str, Any]] = []
     for path in sorted(directory.glob("*.jsonl")):
-        for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(row, dict):
+                rows.append(row)
     # Order by event timestamp (true recency), not file/line order. Pre-timestamp
     # traces default to 0.0 and sort last.
     rows.sort(key=lambda r: r.get("created_at", 0.0), reverse=True)
@@ -92,7 +105,11 @@ def load_metrics(reports_dir: Path | str) -> dict[str, Any] | None:
     path = Path(reports_dir) / "metrics.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        metrics = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return metrics if isinstance(metrics, dict) else None
 
 
 def _action_pill(action: str) -> str:
@@ -186,6 +203,76 @@ def _decisions(rows: list[dict[str, Any]]) -> str:
     return f'<div class="card">{"".join(out)}</div>'
 
 
+def _platform(platform: Any | None) -> str:
+    if platform is None:
+        return '<div class="card empty">Platform evidence overview is not loaded.</div>'
+    data = platform.model_dump() if hasattr(platform, "model_dump") else dict(platform)
+    status = data.get("status", {})
+    decisions = data.get("decisions", {})
+    canaries = data.get("canaries", {})
+    cift = data.get("cift", {})
+    sessions = data.get("sessions", [])
+    evals = data.get("evals", {})
+    headline = evals.get("balanced", {}) if isinstance(evals, dict) else {}
+    success = headline.get("success_criteria", {}) if isinstance(headline, dict) else {}
+
+    status_rows = "".join(
+        f'<div class="kv"><span>{_esc(k)}</span><strong>{_esc(v)}</strong></div>'
+        for k, v in {
+            "provider": status.get("provider", "unknown"),
+            "policy": status.get("policy_mode", "unknown"),
+            "ML probe": "on" if status.get("ml_probe") else "off",
+            "Braintrust": "on" if status.get("braintrust") else "off",
+        }.items()
+    )
+    decision_rows = (
+        "".join(
+            f'<span class="pill">{_esc(k)}: {_esc(v)}</span>'
+            for k, v in (decisions.get("by_action") or {}).items()
+        )
+        or '<span class="empty">No decisions</span>'
+    )
+    canary_rows = (
+        "".join(
+            f'<span class="pill">{_esc(k)}: {_esc(v)}</span>'
+            for k, v in (canaries.get("by_format") or {}).items()
+        )
+        or '<span class="empty">No canaries</span>'
+    )
+    cift_latest = (cift.get("latest") or [{}])[0] if cift.get("latest") else {}
+    cift_label = (
+        f"{cift_latest.get('model_id', 'none')} · {cift_latest.get('level', 'none')}"
+        if cift_latest
+        else "none"
+    )
+    session_rows = (
+        "".join(
+            f'<div class="kv"><span>{_esc(s.get("session_id"))}</span>'
+            f"<strong>{_esc(s.get('nimbus_cumulative_score', 0.0))}</strong></div>"
+            for s in sessions[:3]
+        )
+        or '<div class="empty">No session risk yet</div>'
+    )
+    criteria_rows = (
+        "".join(
+            f'<span class="pill">{_esc(name)}: {"PASS" if ok else "FAIL"}</span>'
+            for name, ok in success.items()
+        )
+        or '<span class="empty">No eval criteria</span>'
+    )
+
+    return f"""
+<div class="split">
+  <div class="card"><div class="det">Runtime</div>{status_rows}</div>
+  <div class="card"><div class="det">Decisions</div><div class="mini">{decision_rows}</div></div>
+  <div class="card"><div class="det">Honeytoken formats</div><div class="mini">{canary_rows}</div></div>
+  <div class="card"><div class="det">CIFT certificates</div><div class="kv"><span>latest</span><strong>{_esc(cift_label)}</strong></div><div class="kv"><span>total</span><strong>{_esc(cift.get("total", 0))}</strong></div></div>
+  <div class="card"><div class="det">Session risk</div>{session_rows}</div>
+  <div class="card"><div class="det">Eval criteria</div><div class="mini">{criteria_rows}</div></div>
+</div>
+"""
+
+
 def render_html(
     metrics: dict[str, Any] | None,
     cases: list[dict[str, Any]],
@@ -193,12 +280,11 @@ def render_html(
     headline: str = "balanced",
     nav_html: str = "",
     auto_refresh: int = 0,
+    platform: Any | None = None,
 ) -> str:
     m = (metrics or {}).get(headline)
     mode_badge = f'{nav_html}<span class="mode">policy: {_esc(headline)}</span>'
-    refresh_meta = (
-        f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ""
-    )
+    refresh_meta = f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ""
 
     if m:
         kpis = _kpis(m)
@@ -216,6 +302,9 @@ def render_html(
 <body>
 <header><h1>Aegis</h1>{mode_badge}</header>
 <div class="sub">Runtime credential defense for LLM agents — decisions, evidence, and eval results.</div>
+
+<div class="label">Platform cockpit</div>
+{_platform(platform)}
 
 <div class="label">Eval summary ({_esc(headline)})</div>
 {kpis}
@@ -243,11 +332,20 @@ def load_cases(reports_dir: Path | str, headline: str = "balanced") -> list[dict
     if not path.exists():
         return []
     cases = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    for line in lines:
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
         if row.get("mode") == headline:
             cases.append(row)
     return cases
@@ -259,10 +357,23 @@ def generate(
     out: Path | str = DEFAULT_OUT,
     headline: str = "balanced",
 ) -> Path:
+    traces_path = Path(traces_dir)
+    reports_path = Path(reports_dir)
     metrics = load_metrics(reports_dir)
     cases = load_cases(reports_dir, headline)
     decisions = load_recent_decisions(traces_dir)
+    platform = collect_platform_overview(
+        settings=Settings(traces_dir=traces_path),
+        provider_name="static",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=reports_path,
+        metrics=metrics,
+    )
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(render_html(metrics, cases, decisions, headline), encoding="utf-8")
+    out_path.write_text(
+        render_html(metrics, cases, decisions, headline, platform=platform.model_dump()),
+        encoding="utf-8",
+    )
     return out_path

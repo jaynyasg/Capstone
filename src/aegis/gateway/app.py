@@ -34,6 +34,7 @@ from aegis.gateway.models import (
     PlantCanaryBody,
 )
 from aegis.gateway.playground import render_playground
+from aegis.platform import PlatformOverview, collect_platform_overview
 from aegis.providers.base import Provider
 
 _REFUSAL = "[blocked by Aegis: withheld]"
@@ -65,6 +66,20 @@ def create_app(
     )
 
     app = FastAPI(title="Aegis Gateway", version="0.1.0")
+
+    def _platform_overview(limit: int = 25) -> PlatformOverview:
+        metrics = load_metrics(DEFAULT_REPORTS_DIR)
+        return collect_platform_overview(
+            settings=settings,
+            provider_name=provider.name,
+            braintrust_enabled=client.tracer.braintrust_enabled,
+            ml_probe_available=client.ml_probe.available if client.ml_probe else False,
+            canaries=client.registry.safe_records(),
+            certifications=cift_store.list(limit=limit),
+            reports_dir=DEFAULT_REPORTS_DIR,
+            metrics=metrics,
+            decision_limit=limit,
+        )
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -158,14 +173,16 @@ def create_app(
         return cert.model_dump()
 
     @app.get("/api/cift/certifications")
-    def cift_certifications(
-        model_id: str | None = None, limit: int = 25
-    ) -> dict[str, Any]:
+    def cift_certifications(model_id: str | None = None, limit: int = 25) -> dict[str, Any]:
         return {"certifications": cift_store.list(model_id, limit)}
 
     @app.get("/api/decisions")
     def decisions(limit: int = 25) -> dict[str, Any]:
         return {"decisions": load_recent_decisions(settings.traces_dir, limit)}
+
+    @app.get("/api/platform/overview")
+    def platform_overview(limit: int = 25) -> dict[str, Any]:
+        return _platform_overview(limit).model_dump()
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:
@@ -173,12 +190,20 @@ def create_app(
         metrics = load_metrics(DEFAULT_REPORTS_DIR)
         cases = load_cases(DEFAULT_REPORTS_DIR)
         recent = load_recent_decisions(settings.traces_dir)
+        platform = _platform_overview()
         nav = (
             '<a href="/try" style="font-size:13px;color:#005ea2;margin-right:14px">'
             "Test console →</a>"
         )
         # Served view re-reads traces every request; meta-refresh makes the feed live.
-        return render_html(metrics, cases, recent, nav_html=nav, auto_refresh=5)
+        return render_html(
+            metrics,
+            cases,
+            recent,
+            nav_html=nav,
+            auto_refresh=5,
+            platform=platform.model_dump(),
+        )
 
     @app.get("/try", response_class=HTMLResponse)
     def playground() -> str:

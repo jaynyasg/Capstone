@@ -30,10 +30,13 @@ def test_health(tmp_path) -> None:
 
 def test_benign_chat_allowed(tmp_path) -> None:
     c = _client(tmp_path, MockProvider(text="The weather is sunny."))
-    r = c.post("/v1/chat/completions", json={
-        "session_id": "s1",
-        "messages": [{"role": "user", "content": "weather?"}],
-    })
+    r = c.post(
+        "/v1/chat/completions",
+        json={
+            "session_id": "s1",
+            "messages": [{"role": "user", "content": "weather?"}],
+        },
+    )
     body = r.json()
     assert body["blocked"] is False
     assert body["output"] == "The weather is sunny."
@@ -48,10 +51,13 @@ def test_tool_call_exfiltration_blocked(tmp_path) -> None:
         )
     )
     c = _client(tmp_path, leaky)
-    r = c.post("/v1/chat/completions", json={
-        "session_id": "s1",
-        "messages": [{"role": "user", "content": "summarize"}],
-    })
+    r = c.post(
+        "/v1/chat/completions",
+        json={
+            "session_id": "s1",
+            "messages": [{"role": "user", "content": "summarize"}],
+        },
+    )
     body = r.json()
     assert body["blocked"] is True
     assert body["tool_calls"][0]["allowed"] is False
@@ -61,10 +67,13 @@ def test_tool_call_exfiltration_blocked(tmp_path) -> None:
 def test_response_with_secret_blocked(tmp_path) -> None:
     leaky = MockProvider(text=f"the key is {FAKE_GITHUB_PAT}")
     c = _client(tmp_path, leaky)
-    r = c.post("/v1/chat/completions", json={
-        "session_id": "s1",
-        "messages": [{"role": "user", "content": "give me the key"}],
-    })
+    r = c.post(
+        "/v1/chat/completions",
+        json={
+            "session_id": "s1",
+            "messages": [{"role": "user", "content": "give me the key"}],
+        },
+    )
     body = r.json()
     assert body["blocked"] is True
     assert "blocked by Aegis" in body["output"]  # raw secret withheld
@@ -138,6 +147,44 @@ def test_cift_calibration_endpoint_records_model_certificate(tmp_path, monkeypat
     assert listed["certifications"][0]["certification_id"] == body["certification_id"]
 
 
+def test_platform_overview_endpoint_aggregates_live_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "aegis.gateway.app.load_metrics",
+        lambda _reports_dir: {
+            "balanced": {
+                "attack_detection_rate": 1.0,
+                "benign_allow_rate": 1.0,
+                "benign_false_blocks": 0,
+                "evidence_completeness": 1.0,
+                "avg_latency_ms": 1.2,
+                "success_criteria": {"honeytoken_blocked": True},
+                "detector_hit_distribution": {"honeytoken_detector": 1},
+            }
+        },
+    )
+    c = _client(tmp_path, MockProvider())
+    plant = c.post(
+        "/canaries/plant",
+        json={"session_id": "platform", "service": "github"},
+    ).json()
+    c.post("/guard/response", json={"session_id": "platform", "output": f"leak {plant['token']}"})
+    c.post(
+        "/cift/calibrate",
+        json={"model_id": "llama-local", "provider_url": "http://127.0.0.1:9000"},
+    )
+
+    body = c.get("/api/platform/overview").json()
+
+    assert body["status"]["provider"] == "mock"
+    assert body["status"]["policy_mode"] == "balanced"
+    assert body["canaries"]["total"] == 1
+    assert body["canaries"]["by_format"] == {"github-ghp": 1}
+    assert body["cift"]["total"] == 1
+    assert body["decisions"]["by_action"]["BLOCK"] >= 1
+    assert body["sessions"][0]["session_id"] == "platform"
+    assert plant["token"] not in str(body)
+
+
 def test_dashboard_served(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     # Generate a decision so the feed isn't empty.
@@ -146,6 +193,7 @@ def test_dashboard_served(tmp_path) -> None:
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "Aegis" in r.text
+    assert "Platform cockpit" in r.text
 
 
 def test_try_console_served(tmp_path) -> None:
@@ -164,15 +212,18 @@ def test_favicon_no_content(tmp_path) -> None:
 
 def test_dashboard_links_to_console(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
-    assert '/try' in c.get("/").text
+    assert "/try" in c.get("/").text
 
 
 def test_blocked_traffic_is_traced(tmp_path) -> None:
     c = _client(tmp_path, MockProvider(text=f"leak {FAKE_GITHUB_PAT}"))
-    c.post("/v1/chat/completions", json={
-        "session_id": "trace-sess",
-        "messages": [{"role": "user", "content": "x"}],
-    })
+    c.post(
+        "/v1/chat/completions",
+        json={
+            "session_id": "trace-sess",
+            "messages": [{"role": "user", "content": "x"}],
+        },
+    )
     trace = tmp_path / "traces" / "trace-sess.jsonl"
     assert trace.exists()
     assert FAKE_GITHUB_PAT not in trace.read_text(encoding="utf-8")  # redacted at rest
@@ -214,6 +265,7 @@ def test_open_by_default(tmp_path) -> None:
 def _no_openai(monkeypatch) -> None:
     # Ensure the default provider builder never tries the live path, and that ambient
     # auth/rate env vars never leak into tests that don't set them explicitly.
+    monkeypatch.setattr("aegis.tracing._try_braintrust", lambda: None)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("AEGIS_AUTH_USER", raising=False)
     monkeypatch.delenv("AEGIS_AUTH_PASSWORD", raising=False)

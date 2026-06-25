@@ -1,10 +1,10 @@
 # Aegis — Runtime Credential Defense for LLM Agents
 
-Aegis is an SDK-first security layer that sits between an LLM agent and the model/tools it
-calls. It inspects requests, model output, and **structured tool-call arguments**, scores
-exfiltration risk, and enforces configurable policy with auditable evidence — so credentials
-are harder to leak through prompt injection, encoded payloads, low-rate multi-turn drip, or
-tool-call arguments.
+Aegis is an LLM security gateway platform with SDK and proxy deployment modes. It sits
+between an LLM agent and the model/tools it calls, inspects requests, model output, and
+**structured tool-call arguments**, scores exfiltration risk, and enforces configurable
+policy with auditable evidence — so credentials are harder to leak through prompt
+injection, encoded payloads, low-rate multi-turn drip, or tool-call arguments.
 
 > **Claim discipline.** This is a demo-grade capstone, not a production guarantee. The
 > leakage ledger is a cumulative *signal*, not a formal proof; the tool-call scanner covers a
@@ -43,8 +43,10 @@ redacted trace:
               Trace ──────────┴──────── .aegis/traces/<session>.jsonl  (+ Braintrust if keyed)
 ```
 
-The **SDK is the single source of truth** for security decisions — the eval harness and
-dashboard call it, never reimplementing the logic.
+The **SDK is the single source of truth** for security decisions — the eval harness,
+gateway, and dashboard call it, never reimplementing the logic. The platform layer then
+aggregates the evidence around that guard path: traces, eval metrics, CIFT certificates,
+canary lifecycle records, policy status, ML-probe state, and Nimbus session risk.
 
 ## Quickstart
 
@@ -127,6 +129,7 @@ route through it instead of embedding `AegisClient`, and every call accumulates 
 | `POST /cift/calibrate` | Record a model-specific CIFT/gateway calibration certificate |
 | `GET /api/cift/certifications` | Recent calibration certificates by hosted model |
 | `GET /api/decisions` | Recent decisions as JSON |
+| `GET /api/platform/overview` | Read-only platform evidence overview for dashboard/API consumers |
 
 The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set, else
 a deterministic mock. Host/port via `AEGIS_GATEWAY_HOST` / `AEGIS_GATEWAY_PORT`.
@@ -218,6 +221,11 @@ audit trail. Teams can promote that evidence into new YAML eval cases, dashboard
 an offline ML-probe training run; production decisions remain deterministic and reviewable
 unless a new detector or policy change is explicitly shipped.
 
+The platform overview keeps that evidence local-file-backed for the capstone. It rolls up
+gateway/provider/policy status, recent decisions, eval success criteria, CIFT calibration
+records, safe honeytoken metadata, and Nimbus session risk into one read-only contract at
+`GET /api/platform/overview`, and the dashboard renders the same contract as a cockpit.
+
 ## CIFT calibration and certification
 
 CIFT is model-specific. Aegis treats it as a calibration/certification layer around the
@@ -295,6 +303,7 @@ src/aegis/
     ml/               # optional risk probe (features, model, training)
   secrets/            # credential broker + local fake store
   providers/          # provider abstraction: mock + openai (gpt-4o-mini)
+  platform/           # local evidence overview for dashboard/API platform layer
   tracing.py          # local JSONL (+ optional Braintrust)
   evals/              # YAML cases, runner, scorers, report, CLI
   dashboard/          # static HTML console generator
