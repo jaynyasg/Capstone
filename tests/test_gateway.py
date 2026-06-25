@@ -77,6 +77,64 @@ def test_direct_guard_endpoint(tmp_path) -> None:
     assert r.json()["action"] == "BLOCK"
 
 
+def test_canary_plant_endpoint_tracks_lifecycle_without_logging_token(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    r = c.post(
+        "/canaries/plant",
+        json={
+            "session_id": "s1",
+            "service": "github",
+            "location": "retrieved_document:doc-7",
+        },
+    )
+    body = r.json()
+    assert body["token"].startswith("aegis_canary_github_")
+    assert body["canary_id"]
+    assert body["trace_id"]
+
+    listed = c.get("/api/canaries", params={"session_id": "s1"}).json()["canaries"]
+    assert listed[0]["canary_id"] == body["canary_id"]
+    assert body["token"] not in str(listed)
+
+    leak = c.post(
+        "/guard/response",
+        json={"session_id": "s1", "output": f"leaked {body['token']}"},
+    ).json()
+    assert leak["action"] == "BLOCK"
+    trace = tmp_path / "traces" / "s1.jsonl"
+    assert body["token"] not in trace.read_text(encoding="utf-8")
+
+
+def test_cift_calibration_endpoint_records_model_certificate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "aegis.gateway.app.load_metrics",
+        lambda _reports_dir: {
+            "balanced": {
+                "attack_detection_rate": 1.0,
+                "benign_allow_rate": 1.0,
+                "evidence_completeness": 1.0,
+                "success_criteria": {
+                    "unsafe_handled_rate>=0.8": True,
+                    "benign_allow_rate>=0.8": True,
+                    "tool_call_injection_blocked": True,
+                    "honeytoken_blocked": True,
+                },
+            }
+        },
+    )
+    c = _client(tmp_path, MockProvider())
+
+    body = c.post(
+        "/cift/calibrate",
+        json={"model_id": "llama-local", "provider_url": "http://127.0.0.1:9000"},
+    ).json()
+    assert body["level"] == "gateway_calibrated"
+    assert body["status"] == "WARN"
+
+    listed = c.get("/api/cift/certifications", params={"model_id": "llama-local"}).json()
+    assert listed["certifications"][0]["certification_id"] == body["certification_id"]
+
+
 def test_dashboard_served(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     # Generate a decision so the feed isn't empty.

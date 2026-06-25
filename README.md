@@ -90,6 +90,21 @@ Every guard returns an `AegisDecision` (`action`, `risk_score`, `reasons`, `dete
 `trace_id`). The decision contract and `AegisEvent` live in `src/aegis/contracts.py` — the
 typed seam every layer mirrors.
 
+To plant and audit a honeytoken before model exposure:
+
+```python
+plant = aegis.plant_canary(
+    service="github",
+    session_id="demo-1",
+    location="retrieved_document:vendor-email-7",
+)
+messages.append({"role": "system", "content": f"Audit marker: {plant.token}"})
+```
+
+The raw token is returned to the caller for placement, but traces store only the
+`canary_id`, service, session, and placement location. If that token later appears in model
+output or a tool argument, the detector evidence links the leak back to the same `canary_id`.
+
 ## Run as a service (gateway)
 
 `uv run aegis-gateway` starts a local FastAPI service that wraps the **same** SDK — apps can
@@ -102,6 +117,10 @@ route through it instead of embedding `AegisClient`, and every call accumulates 
 | `GET /health` | Liveness + active policy mode, provider, Braintrust/ML-probe status |
 | `POST /v1/chat/completions` | Full proxy: guard request → provider → guard tool calls + response |
 | `POST /guard/request` · `/guard/tool_call` · `/guard/response` | Direct SDK guards over HTTP, return an `AegisDecision` |
+| `POST /canaries/plant` | Create a honeytoken, trace its model-visible placement, and return the token to plant |
+| `GET /api/canaries` | Safe canary inventory (`canary_id`, service, session, placement; no raw token) |
+| `POST /cift/calibrate` | Record a model-specific CIFT/gateway calibration certificate |
+| `GET /api/cift/certifications` | Recent calibration certificates by hosted model |
 | `GET /api/decisions` | Recent decisions as JSON |
 
 The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set, else
@@ -186,6 +205,62 @@ All four PRD success criteria pass: unsafe handled ≥ 0.8, benign allowed ≥ 0
 injection blocked, honeytoken blocked. `observe` mode deliberately detects 0 (the baseline);
 `strict` blocks drip one turn earlier.
 
+## Evidence and learning
+
+Aegis accumulates evidence, but it does **not** silently self-train in the live enforcement
+path. Runtime traces, eval artifacts, detector evidence, and canary lifecycle records are the
+audit trail. Teams can promote that evidence into new YAML eval cases, dashboard reports, or
+an offline ML-probe training run; production decisions remain deterministic and reviewable
+unless a new detector or policy change is explicitly shipped.
+
+## CIFT calibration and certification
+
+CIFT is model-specific. Aegis treats it as a calibration/certification layer around the
+model a user hosts, not as a universal detector baked into the gateway. The user can run any
+OpenAI-compatible or adapter-backed model behind Aegis, then record what level of claim Aegis
+can honestly make for that exact endpoint.
+
+Certification levels:
+
+| Level | Meaning |
+| --- | --- |
+| `gateway_calibrated` | The Aegis gateway/eval suite passed for this model endpoint, but no activation evidence was available. |
+| `activation_ready` | The model exposes activation access, but calibration evidence is not complete enough for a CIFT claim. |
+| `cift_certified` | Gateway checks passed and model-specific activation evidence cleared calibration thresholds. |
+| `none` | Required calibration evidence failed or is missing. |
+
+CLI example:
+
+```bash
+uv run aegis-eval
+uv run aegis-cift-calibrate \
+  --model-id llama-3.1-local \
+  --provider-url http://127.0.0.1:9000/v1
+```
+
+Gateway example:
+
+```bash
+curl -s -X POST localhost:8000/cift/calibrate \
+  -H 'content-type: application/json' \
+  -d '{"model_id":"llama-3.1-local","provider_url":"http://127.0.0.1:9000/v1"}'
+```
+
+For true CIFT certification, the hosted model must also expose activation evidence:
+
+```bash
+uv run aegis-cift-calibrate \
+  --model-id llama-3.1-local \
+  --provider-url http://127.0.0.1:9000/v1 \
+  --supports-activations \
+  --activation-endpoint http://127.0.0.1:9000/activations \
+  --activation-sample-count 24 \
+  --activation-separation-score 0.82
+```
+
+Without activation evidence, Aegis can still be useful as a gateway defense, but it will not
+label the model CIFT-certified.
+
 ## Optional ML risk probe
 
 A small PyTorch MLP scores normalized events as one extra signal. It is **never
@@ -197,6 +272,11 @@ uv sync --extra ml
 uv run aegis-train-probe                 # → models/aegis_risk_probe.pt
 AEGIS_ENABLE_ML_PROBE=1 uv run aegis-eval # enable the probe as a signal
 ```
+
+The Docker/Render live gateway enables this optional probe by default: the image installs
+the `ml` extra, trains the small artifact during build, and starts with
+`AEGIS_ENABLE_ML_PROBE=1`. The probe remains WARN-capped and non-authoritative; deterministic
+detectors and policy still own blocking.
 
 ## Project structure
 

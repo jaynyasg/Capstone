@@ -54,6 +54,34 @@ def test_honeytoken_exposure_blocks(tmp_path) -> None:
     assert decision.action == Action.BLOCK
 
 
+def test_canary_plant_is_traced_and_later_detection_links_to_it(tmp_path) -> None:
+    client = make_client(tmp_path)
+    planted = client.plant_canary(
+        service="github",
+        session_id="s1",
+        location="retrieved_document:doc-7",
+        metadata={"source": "unit-test"},
+    )
+
+    trace_file = tmp_path / "traces" / "s1.jsonl"
+    assert trace_file.exists()
+    trace_text = trace_file.read_text(encoding="utf-8")
+    assert planted.token not in trace_text
+
+    plant_event = json.loads(trace_text.strip().splitlines()[-1])
+    assert plant_event["phase"] == "canary_plant"
+    assert plant_event["metadata"]["canary_id"] == planted.canary_id
+    assert plant_event["metadata"]["service"] == "github"
+    assert plant_event["metadata"]["plant_location"] == "retrieved_document:doc-7"
+    assert plant_event["metadata"]["token_logged"] is False
+
+    decision = client.guard_response(f"leaked canary {planted.token}", session_id="s1")
+    assert decision.action == Action.BLOCK
+    hit = next(h for h in decision.detector_hits if h.detector_name == "honeytoken_detector")
+    assert hit.evidence["canary_id"] == planted.canary_id
+    assert planted.token not in trace_file.read_text(encoding="utf-8")
+
+
 def test_benign_handle_usage_allows(tmp_path) -> None:
     store = FakeSecretStore({"secret://github/token": FAKE_GITHUB_PAT})
     client = make_client(tmp_path, store=store)

@@ -14,6 +14,7 @@ from aegis.contracts import (
     Action,
     AegisDecision,
     AegisEvent,
+    CanaryPlant,
     DetectorResult,
     Phase,
     TrustBoundary,
@@ -118,6 +119,57 @@ class AegisClient:
         )
         return self._guard(ctx, metadata)
 
+    def plant_canary(
+        self,
+        service: str,
+        session_id: str = "default",
+        location: str = "model_context",
+        metadata: dict[str, Any] | None = None,
+    ) -> CanaryPlant:
+        """Create a honeytoken and trace its placement into model-visible context.
+
+        The raw token is returned to the caller so it can be inserted into retrieved
+        context or a prompt. Traces store only canary id and placement metadata.
+        """
+        token = self.registry.register(service, session_id, plant_location=location)
+        ht = self.registry.get(token)
+        if ht is None:  # defensive; register/get share the same in-memory registry.
+            raise RuntimeError("registered canary was not retrievable")
+
+        decision = AegisDecision(
+            action=Action.ALLOW,
+            risk_score=0.0,
+            reasons=["canary planted into model-visible context"],
+        )
+        meta = dict(metadata or {})
+        meta.update(
+            {
+                "event_type": "canary_planted",
+                "canary_id": ht.canary_id,
+                "service": ht.service,
+                "plant_location": ht.plant_location,
+                "token_logged": False,
+            }
+        )
+        event = AegisEvent(
+            session_id=session_id,
+            phase=Phase.CANARY_PLANT,
+            trusted_boundary=TrustBoundary.UNTRUSTED,
+            input_summary=f"canary planted for {service} into {location}",
+            detector_evidence=[],
+            policy_decision=decision,
+            metadata=meta,
+        )
+        self.tracer.record(event)
+        return CanaryPlant(
+            token=token,
+            canary_id=ht.canary_id,
+            service=ht.service,
+            session_id=ht.session_id,
+            location=ht.plant_location,
+            trace_id=event.event_id,
+        )
+
     # ----- pipeline ------------------------------------------------------
 
     def _guard(self, ctx: ScanContext, metadata: dict[str, Any] | None) -> AegisDecision:
@@ -161,7 +213,7 @@ class AegisClient:
         assessment,
         metadata: dict[str, Any] | None,
     ) -> AegisEvent:
-        summary = redact_text(ctx.text)[:_SUMMARY_LIMIT]
+        summary = self.registry.redact_text(redact_text(ctx.text))[:_SUMMARY_LIMIT]
         meta = dict(metadata or {})
         meta["policy_mode"] = self.settings.policy_mode
         if assessment.critical:
@@ -173,7 +225,7 @@ class AegisClient:
             trusted_boundary=ctx.trusted_boundary,
             input_summary=summary,
             tool_name=ctx.tool_name,
-            tool_arguments=_redact_args(ctx.tool_arguments),
+            tool_arguments=_redact_args(ctx.tool_arguments, self.registry),
             detector_evidence=results,
             policy_decision=decision,
             metadata=meta,
@@ -208,7 +260,9 @@ def _args_to_text(arguments: dict[str, Any]) -> str:
     return "\n".join(f"{k}={v}" for k, v in (arguments or {}).items())
 
 
-def _redact_args(arguments: dict[str, Any] | None) -> dict[str, Any] | None:
+def _redact_args(
+    arguments: dict[str, Any] | None, registry: HoneytokenRegistry
+) -> dict[str, Any] | None:
     if not arguments:
         return arguments
-    return {k: redact_text(str(v)) for k, v in arguments.items()}
+    return {k: registry.redact_text(redact_text(str(v))) for k, v in arguments.items()}

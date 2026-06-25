@@ -33,3 +33,20 @@ class GuardResponseBody(BaseModel):
     session_id: str = "gateway"
     output: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlantCanaryBody(BaseModel):
+    session_id: str = "gateway"
+    service: str
+    location: str = "model_context"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CiftCalibrationBody(BaseModel):
+    model_id: str
+    provider_url: str = "local"
+    supports_activations: bool = False
+    activation_endpoint: str | None = None
+    activation_sample_count: int = Field(default=0, ge=0)
+    activation_separation_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)

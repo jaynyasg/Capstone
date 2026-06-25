@@ -26,6 +26,7 @@ aegis-verify = "aegis.verify:main"
 aegis-eval = "aegis.evals.cli:main"
 aegis-dashboard = "aegis.dashboard.cli:main"
 aegis-train-probe = "aegis.detectors.ml.train:main"
+aegis-cift-calibrate = "aegis.cift.cli:main"
 aegis-gateway = "aegis.gateway.cli:main"
 
 [build-system]

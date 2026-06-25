@@ -54,6 +54,7 @@ class Phase(StrEnum):
     REQUEST = "request"
     TOOL_CALL = "tool_call"
     RESPONSE = "response"
+    CANARY_PLANT = "canary_plant"
 
 
 class TrustBoundary(StrEnum):
@@ -86,6 +87,17 @@ class AegisDecision(BaseModel):
     @property
     def allowed(self) -> bool:
         return self.action is Action.ALLOW
+
+
+class CanaryPlant(BaseModel):
+    """Audit record returned when Aegis plants a honeytoken into model-visible context."""
+
+    token: str
+    canary_id: str
+    service: str
+    session_id: str
+    location: str
+    trace_id: str | None = None
 
 
 class AegisEvent(BaseModel):

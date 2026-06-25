@@ -64,16 +64,21 @@ class SuiteResult:
 
 def run_case(case: EvalCase, mode: PolicyMode, traces_dir: Path) -> CaseResult:
     registry = HoneytokenRegistry()
-    canary_map: dict[str, str] = {}
-    for spec in case.setup.canaries:
-        canary_map[spec.service] = registry.register(spec.service, case.id)
-
     client = AegisClient(
         settings=Settings(policy_mode=mode, traces_dir=traces_dir),
         broker=CredentialBroker(FakeSecretStore(case.setup.secrets)),
         registry=registry,
         tracer=Tracer(traces_dir),
     )
+    canary_map: dict[str, str] = {}
+    for spec in case.setup.canaries:
+        planted = client.plant_canary(
+            spec.service,
+            case.id,
+            location="eval_model_context",
+            metadata={"eval_case": case.id},
+        )
+        canary_map[spec.service] = planted.token
     canary_tokens = list(canary_map.values())
 
     steps: list[StepResult] = []

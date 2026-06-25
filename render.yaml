@@ -20,5 +20,9 @@ services:
       # Policy + abuse controls.
       - key: AEGIS_POLICY_MODE
         value: balanced
+      - key: AEGIS_ENABLE_ML_PROBE
+        value: "1"
+      - key: AEGIS_ML_PROBE_PATH
+        value: models/aegis_risk_probe.pt
       - key: AEGIS_RATE_LIMIT_PER_MIN
         value: "30"

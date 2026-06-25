@@ -7,6 +7,7 @@ output or tool arguments is a high-confidence exfiltration signal.
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -25,6 +26,8 @@ class Honeytoken:
     service: str
     session_id: str
     canary_id: str
+    plant_location: str = "registry"
+    planted_at: float = field(default_factory=time.time)
     normalized: str = field(default="")
 
 
@@ -34,7 +37,7 @@ class HoneytokenRegistry:
     def __init__(self) -> None:
         self._tokens: dict[str, Honeytoken] = {}
 
-    def register(self, service: str, session_id: str) -> str:
+    def register(self, service: str, session_id: str, plant_location: str = "registry") -> str:
         canary_id = f"ht_{uuid.uuid4().hex[:8]}"
         token = f"aegis_canary_{service}_{uuid.uuid4().hex[:12]}"
         self._tokens[token] = Honeytoken(
@@ -42,15 +45,43 @@ class HoneytokenRegistry:
             service=service,
             session_id=session_id,
             canary_id=canary_id,
+            plant_location=plant_location,
             normalized=_normalize(token),
         )
         return token
+
+    def get(self, token: str) -> Honeytoken | None:
+        return self._tokens.get(token)
 
     def is_canary(self, token: str) -> bool:
         return token in self._tokens
 
     def all(self) -> list[Honeytoken]:
         return list(self._tokens.values())
+
+    def safe_records(self, session_id: str | None = None) -> list[dict[str, object]]:
+        records = self.all()
+        if session_id is not None:
+            records = [ht for ht in records if ht.session_id == session_id]
+        return [
+            {
+                "canary_id": ht.canary_id,
+                "service": ht.service,
+                "session_id": ht.session_id,
+                "plant_location": ht.plant_location,
+                "planted_at": ht.planted_at,
+            }
+            for ht in records
+        ]
+
+    def redact_text(self, value: str) -> str:
+        text = value
+        for ht in self.all():
+            marker = f"[REDACTED:canary:{ht.canary_id}]"
+            text = text.replace(ht.token, marker)
+            spaced_pattern = r"\s*".join(re.escape(ch) for ch in ht.token)
+            text = re.sub(spaced_pattern, marker, text)
+        return text
 
 
 def _phase_location(phase: Phase) -> str:

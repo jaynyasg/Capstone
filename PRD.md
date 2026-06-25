@@ -218,6 +218,10 @@ tension or stretch goal.
 FR-14 Optional ML risk probe P2 A bounded PyTorch detector may score normalized
 events, but deterministic detectors remain authoritative
 for high-confidence blocking.
+FR-15 Model-specific CIFT calibration P2 The gateway can record a calibration certificate
+for a user-hosted model endpoint. Gateway-only models receive a gateway calibration
+status; CIFT certification requires model-specific activation evidence that passes
+documented thresholds.
 ```
 
 ### 3.7 Non-Functional Requirements

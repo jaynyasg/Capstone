@@ -72,3 +72,25 @@ def test_token_only_visible_in_untrusted_context() -> None:
     token = reg.register(service="github", session_id="s1")
     assert token.startswith("aegis_canary_")
     assert reg.is_canary(token)
+
+
+def test_registry_exposes_safe_canary_records_without_token() -> None:
+    reg = HoneytokenRegistry()
+    token = reg.register(service="github", session_id="s1", plant_location="retrieved_doc")
+
+    [record] = reg.safe_records("s1")
+    assert record["service"] == "github"
+    assert record["session_id"] == "s1"
+    assert record["plant_location"] == "retrieved_doc"
+    assert record["canary_id"]
+    assert token not in str(record)
+
+
+def test_registry_redacts_exact_and_smeared_canary() -> None:
+    reg = HoneytokenRegistry()
+    token = reg.register(service="github", session_id="s1")
+    canary_id = reg.get(token).canary_id  # type: ignore[union-attr]
+
+    assert token not in reg.redact_text(f"leak {token}")
+    assert f"[REDACTED:canary:{canary_id}]" in reg.redact_text(f"leak {token}")
+    assert token not in reg.redact_text(" ".join(token))

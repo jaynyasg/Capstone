@@ -142,7 +142,11 @@ Aegis owns the security boundary between the user/client side and the model/tool
 
    Stretch detector stage/interface:
 
-   - CIFT adapter interface for white-box activation probes. The MVP should define the interface but not depend on white-box model access.
+- CIFT calibration and certification layer: every hosted model endpoint gets its own
+  calibration record. Gateway-only models can be `gateway_calibrated`; models that expose
+  activation access can become `activation_ready`; only model-specific activation evidence
+  that clears thresholds earns `cift_certified`. The MVP must not claim universal CIFT for
+  cloud/API models without activation evidence.
 
 4. Policy engine
 

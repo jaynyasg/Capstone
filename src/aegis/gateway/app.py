@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 
+from aegis.cift import CiftCalibrationRequest, CiftCertificationStore, calibrate_model
 from aegis.client import AegisClient
 from aegis.config import Settings
 from aegis.dashboard.render import (
@@ -26,9 +27,11 @@ from aegis.dashboard.render import (
 from aegis.gateway.auth import add_basic_auth, add_rate_limit, auth_from_env
 from aegis.gateway.models import (
     ChatRequest,
+    CiftCalibrationBody,
     GuardRequestBody,
     GuardResponseBody,
     GuardToolBody,
+    PlantCanaryBody,
 )
 from aegis.gateway.playground import render_playground
 from aegis.providers.base import Provider
@@ -57,6 +60,9 @@ def create_app(
     settings = settings or Settings.load()
     client = client or AegisClient(settings=settings)
     provider = provider or _build_provider()
+    cift_store = CiftCertificationStore(
+        settings.traces_dir.parent / "cift" / "certifications.jsonl"
+    )
 
     app = FastAPI(title="Aegis Gateway", version="0.1.0")
 
@@ -128,6 +134,30 @@ def create_app(
     @app.post("/guard/response")
     def guard_response(body: GuardResponseBody) -> dict[str, Any]:
         return client.guard_response(body.output, body.session_id, body.metadata).model_dump()
+
+    @app.post("/canaries/plant")
+    def plant_canary(body: PlantCanaryBody) -> dict[str, Any]:
+        return client.plant_canary(
+            body.service, body.session_id, body.location, body.metadata
+        ).model_dump()
+
+    @app.get("/api/canaries")
+    def canaries(session_id: str | None = None) -> dict[str, Any]:
+        return {"canaries": client.registry.safe_records(session_id)}
+
+    @app.post("/cift/calibrate")
+    def cift_calibrate(body: CiftCalibrationBody) -> dict[str, Any]:
+        metrics = load_metrics(DEFAULT_REPORTS_DIR)
+        request = CiftCalibrationRequest(**body.model_dump())
+        cert = calibrate_model(request, metrics)
+        cift_store.append(cert)
+        return cert.model_dump()
+
+    @app.get("/api/cift/certifications")
+    def cift_certifications(
+        model_id: str | None = None, limit: int = 25
+    ) -> dict[str, Any]:
+        return {"certifications": cift_store.list(model_id, limit)}
 
     @app.get("/api/decisions")
     def decisions(limit: int = 25) -> dict[str, Any]:
