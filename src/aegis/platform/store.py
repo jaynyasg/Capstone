@@ -22,12 +22,9 @@ from __future__ import annotations
 
 import time
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
-
-if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
-    from aegis.platform.evidence import PlatformOverview
 
 # Platform API/response schema version. Bumped when the response contract changes shape.
 SCHEMA_VERSION = "1.0"
@@ -156,13 +153,12 @@ class RecordWindow(BaseModel):
 
 @runtime_checkable
 class EvidenceStore(Protocol):
-    """The read boundary the gateway, dashboard, and exports consume.
+    """The bounded read boundary the gateway, dashboard, and exports consume.
 
-    The JSONL-backed default (U1) and the SQLite adapter (U2) both satisfy this shape, so
-    consumers never parse raw artifacts themselves.
+    Each drilldown returns a :class:`RecordWindow` (truthful ``total`` + bounded ``latest``).
+    The full :class:`PlatformOverview` is assembled one level up (it needs runtime status and
+    eval metrics the raw store does not own), so it is not part of this structural contract.
     """
-
-    def overview(self, query: EvidenceQuery | None = None) -> PlatformOverview: ...
 
     def decisions(self, query: EvidenceQuery | None = None) -> RecordWindow: ...
 

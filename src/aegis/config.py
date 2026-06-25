@@ -32,6 +32,24 @@ class Settings:
     traces_dir: Path = Path(".aegis/traces")
     enable_ml_probe: bool = False
     ml_probe_path: Path = Path("models/aegis_risk_probe.pt")
+    platform_dir: Path | None = None
+
+    @property
+    def platform_state_dir(self) -> Path:
+        """Shared local platform state root (SQLite evidence + canary vault).
+
+        Defaults next to ``traces_dir`` under the same ``.aegis`` root so traces, CIFT
+        records, the evidence store, and the canary vault share one backup/restore story
+        (KTD13). Deriving from ``traces_dir`` keeps test state isolated under tmp dirs.
+        """
+        if self.platform_dir is not None:
+            return self.platform_dir
+        return self.traces_dir.parent / "platform"
+
+    @property
+    def evidence_db_path(self) -> Path:
+        """Local SQLite evidence read model."""
+        return self.platform_state_dir / "evidence.db"
 
     @classmethod
     def load(cls, policy_path: Path | str = DEFAULT_POLICY_PATH) -> Settings:
@@ -46,6 +64,7 @@ class Settings:
         mode = os.environ.get("AEGIS_POLICY_MODE", data.get("mode", "balanced"))
         ml = data.get("ml_probe", {})
         ml_default = "1" if ml.get("enabled") else "0"
+        platform_dir_env = os.environ.get("AEGIS_PLATFORM_DIR", data.get("platform_dir"))
         return cls(
             policy_mode=PolicyMode(mode),
             local_test_mode=os.environ.get("AEGIS_LOCAL_TEST_MODE", "0") == "1",
@@ -56,4 +75,5 @@ class Settings:
             ml_probe_path=Path(
                 os.environ.get("AEGIS_ML_PROBE_PATH", ml.get("path", "models/aegis_risk_probe.pt"))
             ),
+            platform_dir=Path(platform_dir_env) if platform_dir_env else None,
         )
