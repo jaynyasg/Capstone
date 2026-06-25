@@ -29,6 +29,10 @@ from aegis.platform.store import (
     WarningType,
 )
 
+# Raw canary material that must never appear in evidence views — the single source of truth
+# for "what is sensitive on a canary record", shared with the SQLite importer.
+SENSITIVE_CANARY_KEYS = frozenset({"token", "normalized"})
+
 
 class PlatformStatus(BaseModel):
     """Runtime status for the gateway process serving the platform view."""
@@ -139,7 +143,7 @@ def collect_platform_overview(
         eval_metrics, eval_warnings = load_eval_metrics_with_health(reports_path)
         warnings.extend(eval_warnings)
 
-    cift_path = settings.traces_dir.parent / "cift" / "certifications.jsonl"
+    cift_path = settings.cift_path
     if certifications is not None:
         cift_records: list[Any] = certifications
     else:
@@ -444,7 +448,7 @@ def _safe_canary_record(record: dict[str, Any]) -> dict[str, Any]:
     return {
         str(key): _redact_jsonish(value)
         for key, value in record.items()
-        if key not in {"token", "normalized"}
+        if key not in SENSITIVE_CANARY_KEYS
     }
 
 

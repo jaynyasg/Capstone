@@ -39,28 +39,12 @@ from aegis.platform.exports import collect_audit_bundle, render_markdown_bundle
 from aegis.platform.snapshots import SnapshotCache
 from aegis.platform.sqlite_store import SqliteEvidenceStore, build_overview_from_store, sync_store
 from aegis.platform.store import (
-    DEFAULT_LIMIT,
     SCHEMA_VERSION,
     EvidenceHealth,
     EvidenceQuery,
     RecordWindow,
 )
 from aegis.providers.base import Provider
-
-
-def _is_default_overview_query(query: EvidenceQuery) -> bool:
-    """Whether a query is the unfiltered default — the only shape the snapshot cache serves."""
-    return (
-        query.limit == DEFAULT_LIMIT
-        and query.offset == 0
-        and query.session_id is None
-        and query.action is None
-        and query.phase is None
-        and query.detector is None
-        and query.model_id is None
-        and query.since is None
-        and query.until is None
-    )
 
 _REFUSAL = "[blocked by Aegis: withheld]"
 
@@ -97,9 +81,7 @@ def create_app(
     settings = settings or Settings.load()
     client = client or AegisClient(settings=settings)
     provider = provider or _build_provider()
-    cift_store = CiftCertificationStore(
-        settings.traces_dir.parent / "cift" / "certifications.jsonl"
-    )
+    cift_store = CiftCertificationStore(settings.cift_path)
     store = SqliteEvidenceStore(settings.evidence_db_path)
 
     app = FastAPI(title="Aegis Gateway", version="0.1.0")
@@ -256,7 +238,9 @@ def create_app(
         limit: int = 25, offset: int = 0, session_id: str | None = None
     ) -> dict[str, Any]:
         query = _query(limit=limit, offset=offset, session_id=session_id)
-        if _is_default_overview_query(query):
+        # Only the unfiltered default shape is cacheable; pydantic value-equality tracks new
+        # query fields automatically (a hand-rolled field list would silently go stale).
+        if query == EvidenceQuery():
             return snapshot_cache.get().model_dump()  # cached + freshness-labelled
         return _platform_overview(query).model_dump()
 

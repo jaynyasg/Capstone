@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from aegis.config import Settings
-from aegis.platform import collect_platform_overview
+from aegis.platform import (
+    collect_platform_overview,
+    load_eval_metrics_with_health,
+    load_trace_events,
+)
 from aegis.platform.store import FreshnessState
 
 DEFAULT_TRACES_DIR = Path(".aegis/traces")
@@ -106,40 +110,14 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def load_recent_decisions(traces_dir: Path | str, limit: int = 25) -> list[dict[str, Any]]:
-    directory = Path(traces_dir)
-    if not directory.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("*.jsonl")):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-    # Order by event timestamp (true recency), not file/line order. Pre-timestamp
-    # traces default to 0.0 and sort last.
-    rows.sort(key=lambda r: r.get("created_at", 0.0), reverse=True)
-    return rows[:limit]
+    """Recent trace rows, newest first. Thin wrapper over the shared platform JSONL reader."""
+    return load_trace_events(traces_dir, limit)
 
 
 def load_metrics(reports_dir: Path | str) -> dict[str, Any] | None:
-    path = Path(reports_dir) / "metrics.json"
-    if not path.exists():
-        return None
-    try:
-        metrics = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    return metrics if isinstance(metrics, dict) else None
+    """Eval metrics if present; corrupt/absent → None. Shares the platform loader's logic."""
+    metrics, _ = load_eval_metrics_with_health(reports_dir)
+    return metrics
 
 
 def _action_pill(action: str) -> str:
@@ -258,7 +236,7 @@ def _decisions(decisions: dict[str, Any], health: dict[str, Any]) -> str:
     out = []
     for r in rows:
         action = r.get("action", "ALLOW")
-        fired = [name for name in r.get("detectors", [])]
+        fired = r.get("detectors", [])
         phase = r.get("phase", "?")
         tool = f" · {_esc(r['tool_name'])}" if r.get("tool_name") else ""
         det = f'<span class="det">{_esc(", ".join(dict.fromkeys(fired)))}</span>' if fired else ""

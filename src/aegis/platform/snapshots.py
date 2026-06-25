@@ -52,27 +52,25 @@ class SnapshotCache:
             self._cached = overview
             self._generated_at = now
             return overview.model_copy(
-                update={"snapshot": self._meta(now, FreshnessState.LIVE, 0.0, "live")}
+                update={"snapshot": self._meta(now, FreshnessState.LIVE, 0.0)}
             )
         age = now - self._generated_at
         freshness = FreshnessState.STALE if age >= self._stale_after else FreshnessState.CACHED
         # Reuse cached counts/windows but refresh only the freshness metadata. The cached
         # overview keeps its health, so warnings remain visible on a cached/stale read.
         return self._cached.model_copy(
-            update={"snapshot": self._meta(self._generated_at, freshness, age, "cache")}
+            update={"snapshot": self._meta(self._generated_at, freshness, age)}
         )
 
     def invalidate(self) -> None:
         self._cached = None
 
-    def _meta(
-        self, generated_at: float, freshness: FreshnessState, age: float, source: str
-    ) -> SnapshotMeta:
+    def _meta(self, generated_at: float, freshness: FreshnessState, age: float) -> SnapshotMeta:
         return SnapshotMeta(
             schema_version=SCHEMA_VERSION,
             generated_at=generated_at,
             freshness=freshness,
             cache_age_seconds=age,
-            refresh_source=source,
+            refresh_source="live" if freshness is FreshnessState.LIVE else "cache",
             stale_after_seconds=self._stale_after,
         )

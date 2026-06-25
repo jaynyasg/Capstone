@@ -63,6 +63,11 @@ class Settings:
         """Local durable canary vault (encrypted raw tokens + plaintext safe metadata)."""
         return self.platform_state_dir / "canary_vault.db"
 
+    @property
+    def cift_path(self) -> Path:
+        """Local CIFT certificate JSONL, under the same `.aegis` root as traces."""
+        return self.traces_dir.parent / "cift" / "certifications.jsonl"
+
     @classmethod
     def load(cls, policy_path: Path | str = DEFAULT_POLICY_PATH) -> Settings:
         load_env()

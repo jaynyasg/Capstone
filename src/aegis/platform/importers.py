@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from aegis.detectors._credutil import redact_text
 from aegis.platform.evidence import (
+    SENSITIVE_CANARY_KEYS,
     _canaries_from_traces,
     _record_dict,
     _redact_jsonish,
@@ -110,7 +111,7 @@ def _cift_row(raw: Any) -> dict[str, Any]:
 def _safe_canary(raw: Any) -> dict[str, Any]:
     record = _record_dict(raw)
     safe = _redact_jsonish(
-        {key: value for key, value in record.items() if key not in {"token", "normalized"}}
+        {key: value for key, value in record.items() if key not in SENSITIVE_CANARY_KEYS}
     )
     return {
         "canary_id": str(safe.get("canary_id", "unknown")),

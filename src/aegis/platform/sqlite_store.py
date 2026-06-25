@@ -17,6 +17,7 @@ degrading gracefully where the journal mode cannot be switched.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -291,7 +292,8 @@ class SqliteEvidenceStore:
                 "ORDER BY created_at DESC, event_id DESC LIMIT ? OFFSET ?",
                 (*params, query.limit, query.offset),
             ).fetchall()
-            latest = [self._decision_row(conn, row) for row in rows]
+            fired = self._fired_detectors_for(conn, [row["event_id"] for row in rows])
+            latest = [_decision_row(row, fired.get(row["event_id"], [])) for row in rows]
         return RecordWindow(total=total, latest=latest, query=query)
 
     def sessions(self, query: EvidenceQuery | None = None) -> RecordWindow:
@@ -456,26 +458,36 @@ class SqliteEvidenceStore:
 
     # ----- helpers -------------------------------------------------------
 
-    def _decision_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
-        fired = [
-            r["detector_name"]
-            for r in conn.execute(
-                "SELECT detector_name FROM detector_hits WHERE event_id=? AND fired=1 "
-                "ORDER BY detector_name",
-                (row["event_id"],),
-            ).fetchall()
-        ]
-        return {
-            "event_id": row["event_id"],
-            "created_at": row["created_at"],
-            "session_id": row["session_id"],
-            "phase": row["phase"],
-            "tool_name": row["tool_name"],
-            "action": row["action"],
-            "risk_score": row["risk_score"],
-            "detectors": fired,
-            "summary": row["summary"],
-        }
+    def _fired_detectors_for(
+        self, conn: sqlite3.Connection, event_ids: list[str]
+    ) -> dict[str, list[str]]:
+        """Fired detector names grouped per event, fetched in one query (avoids an N+1 read)."""
+        if not event_ids:
+            return {}
+        placeholders = ",".join("?" * len(event_ids))
+        grouped: dict[str, list[str]] = {}
+        for row in conn.execute(
+            f"SELECT event_id, detector_name FROM detector_hits "
+            f"WHERE fired=1 AND event_id IN ({placeholders}) ORDER BY detector_name",
+            event_ids,
+        ).fetchall():
+            grouped.setdefault(row["event_id"], []).append(row["detector_name"])
+        return grouped
+
+
+def _decision_row(row: sqlite3.Row, fired: list[str]) -> dict[str, Any]:
+    """Shape one evidence_events row + its pre-fetched fired detectors into a display dict."""
+    return {
+        "event_id": row["event_id"],
+        "created_at": row["created_at"],
+        "session_id": row["session_id"],
+        "phase": row["phase"],
+        "tool_name": row["tool_name"],
+        "action": row["action"],
+        "risk_score": row["risk_score"],
+        "detectors": fired,
+        "summary": row["summary"],
+    }
 
 
 def _event_where(query: EvidenceQuery) -> tuple[str, tuple[Any, ...]]:
@@ -517,8 +529,6 @@ def _canary_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _json_or_empty(value: str) -> dict[str, Any]:
-    import json
-
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, TypeError):
@@ -549,7 +559,7 @@ def sync_store(
     if certifications is not None:
         import_cift_records(store, certifications)
     else:
-        import_cift_jsonl(store, settings.traces_dir.parent / "cift" / "certifications.jsonl")
+        import_cift_jsonl(store, settings.cift_path)
     if canaries is not None:
         import_canary_records(store, canaries)
 
@@ -578,7 +588,7 @@ def build_overview_from_store(
     if query is None:
         query = EvidenceQuery()
     reports_path = Path(reports_dir)
-    cift_path = settings.traces_dir.parent / "cift" / "certifications.jsonl"
+    cift_path = settings.cift_path
 
     sync_store(store, settings, certifications=certifications, canaries=canaries)
 
