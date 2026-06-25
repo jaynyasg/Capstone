@@ -62,3 +62,22 @@ Each claim → its cheapest re-runnable check. `[ ]` = not yet green.
 - Gateway (FR-2): `uv run aegis-gateway` → http://127.0.0.1:8000 (proxy + /guard/* + dashboard at /). src/aegis/gateway/, tests/test_gateway.py
 - Stop hook (bind the gate so it can't rot) — add to `.claude/settings.json` (needs your approval):
   `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"uv run aegis-verify"}]}]}}`
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
