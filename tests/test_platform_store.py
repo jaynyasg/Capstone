@@ -240,3 +240,38 @@ def test_store_sessions_reflect_latest_action_and_nimbus(tmp_path) -> None:
     assert session["events"] == 2
     assert session["latest_action"] == "BLOCK"  # newest event's action
     assert session["nimbus_cumulative_score"] == 1.4
+
+
+def test_store_session_nimbus_uses_max_not_trailing_event(tmp_path) -> None:
+    # The nimbus ledger is monotonic, so a session's risk is its peak score. A trailing
+    # event with no nimbus detector (e.g. a benign canary plant, nimbus 0) must not zero
+    # the session's reported cumulative score.
+    traces = tmp_path / "traces"
+    _write_trace(
+        traces,
+        [
+            _event(1, session="risky", action="ALLOW", created=1.0),
+            _event(
+                2,
+                session="risky",
+                action="BLOCK",
+                created=5.0,
+                detectors=[
+                    {
+                        "detector_name": "nimbus_lite_ledger",
+                        "recommended_action": "WARN",
+                        "score": 0.6,
+                        "evidence": {"cumulative_score": 1.4},
+                    }
+                ],
+            ),
+            _event(3, session="risky", action="ALLOW", created=9.0),  # trailing plant, nimbus 0
+        ],
+    )
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    import_trace_events(store, traces)
+
+    session = store.sessions().latest[0]
+    assert session["events"] == 3
+    assert session["latest_action"] == "ALLOW"  # newest event's action (event 3)
+    assert session["nimbus_cumulative_score"] == 1.4  # MAX over session, not the trailing 0

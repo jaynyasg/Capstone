@@ -318,7 +318,11 @@ class SqliteEvidenceStore:
                             COUNT(*) OVER (PARTITION BY session_id) AS events,
                             MAX(created_at) OVER (PARTITION BY session_id) AS last_seen,
                             action AS latest_action,
-                            nimbus_score AS nimbus_cumulative_score,
+                            -- The nimbus ledger is monotonic, so a session's risk is its peak.
+                            -- Taking MAX (not the latest row) stops a trailing nimbus-0 event
+                            -- (e.g. a benign canary plant) from zeroing the session score.
+                            MAX(nimbus_score) OVER (PARTITION BY session_id)
+                              AS nimbus_cumulative_score,
                             ROW_NUMBER() OVER (
                               PARTITION BY session_id ORDER BY created_at DESC, event_id DESC
                             ) AS rn
