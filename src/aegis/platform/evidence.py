@@ -18,6 +18,16 @@ from pydantic import BaseModel, Field
 
 from aegis.config import Settings
 from aegis.detectors._credutil import redact_text
+from aegis.platform.store import (
+    SCHEMA_VERSION,
+    EvidenceHealth,
+    EvidenceQuery,
+    FreshnessState,
+    HealthSeverity,
+    HealthWarning,
+    SnapshotMeta,
+    WarningType,
+)
 
 
 class PlatformStatus(BaseModel):
@@ -71,9 +81,19 @@ class SessionRiskOverview(BaseModel):
 
 
 class PlatformOverview(BaseModel):
-    """Single platform contract consumed by the gateway API and dashboard."""
+    """Single versioned platform contract consumed by the gateway API and dashboard.
 
+    ``schema_version`` and ``query`` let a caller understand *which slice* of evidence it is
+    looking at; ``health`` and ``snapshot`` tell it whether that slice is complete and fresh.
+    Per-section ``total`` always counts all matching records; ``recent``/``latest`` is the
+    bounded window actually returned.
+    """
+
+    schema_version: str = SCHEMA_VERSION
     generated_at: float = Field(default_factory=time.time)
+    query: EvidenceQuery = Field(default_factory=EvidenceQuery)
+    snapshot: SnapshotMeta = Field(default_factory=SnapshotMeta)
+    health: EvidenceHealth = Field(default_factory=EvidenceHealth)
     status: PlatformStatus
     decisions: DecisionOverview
     evals: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -94,17 +114,45 @@ def collect_platform_overview(
     certifications: list[Any] | None = None,
     metrics: dict[str, Any] | None = None,
     decision_limit: int = 25,
+    query: EvidenceQuery | None = None,
 ) -> PlatformOverview:
-    """Collect a read-only overview from local Aegis evidence artifacts."""
+    """Collect a read-only, health-aware overview from local Aegis evidence artifacts.
+
+    ``query`` drives the returned window; when omitted it defaults to ``decision_limit`` so
+    existing callers keep their behaviour. Sources loaded from disk (traces, and eval/CIFT
+    when not passed in directly) contribute structured health warnings instead of silently
+    degrading to empty.
+    """
 
     reports_path = Path(reports_dir)
+    if query is None:
+        query = EvidenceQuery(limit=decision_limit)
+    limit = query.limit
+
+    warnings: list[HealthWarning] = []
+    events, trace_warnings = load_jsonl_with_health(settings.traces_dir, source_kind="traces")
+    warnings.extend(trace_warnings)
+
+    if metrics is not None:
+        eval_metrics: dict[str, Any] | None = metrics
+    else:
+        eval_metrics, eval_warnings = load_eval_metrics_with_health(reports_path)
+        warnings.extend(eval_warnings)
+
     cift_path = settings.traces_dir.parent / "cift" / "certifications.jsonl"
-    events = load_trace_events(settings.traces_dir, limit=None)
-    eval_metrics = metrics if metrics is not None else load_eval_metrics(reports_path)
-    cift_records = certifications if certifications is not None else load_jsonl_records(cift_path)
+    if certifications is not None:
+        cift_records: list[Any] = certifications
+    else:
+        cift_records, cift_warnings = load_jsonl_with_health(cift_path, source_kind="cift")
+        warnings.extend(cift_warnings)
+
     canary_records = canaries if canaries is not None else _canaries_from_traces(events)
 
     return PlatformOverview(
+        schema_version=SCHEMA_VERSION,
+        query=query,
+        snapshot=SnapshotMeta(generated_at=time.time(), freshness=FreshnessState.LIVE),
+        health=EvidenceHealth.from_warnings(warnings),
         status=PlatformStatus(
             provider=provider_name,
             policy_mode=str(settings.policy_mode),
@@ -113,10 +161,10 @@ def collect_platform_overview(
             traces_dir=str(settings.traces_dir),
             reports_dir=str(reports_path),
         ),
-        decisions=_summarize_decisions(events, decision_limit),
+        decisions=_summarize_decisions(events, limit),
         evals=eval_metrics or {},
-        cift=_summarize_cift(cift_records, decision_limit),
-        canaries=_summarize_canaries(canary_records, decision_limit),
+        cift=_summarize_cift(cift_records, limit),
+        canaries=_summarize_canaries(canary_records, limit),
         sessions=_summarize_sessions(events),
         evidence_paths={
             "traces": str(settings.traces_dir),
@@ -136,29 +184,83 @@ def load_trace_events(traces_dir: Path | str, limit: int | None = 25) -> list[di
 def load_eval_metrics(reports_dir: Path | str) -> dict[str, Any] | None:
     """Read eval metrics JSON if present; corrupt or absent artifacts degrade to empty."""
 
+    metrics, _ = load_eval_metrics_with_health(reports_dir)
+    return metrics
+
+
+def load_eval_metrics_with_health(
+    reports_dir: Path | str,
+) -> tuple[dict[str, Any] | None, list[HealthWarning]]:
+    """Read eval metrics with health: absent is healthy-empty, corrupt is an ERROR warning."""
+
     path = Path(reports_dir) / "metrics.json"
     if not path.exists():
-        return None
+        return None, []
     try:
         metrics = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    return metrics if isinstance(metrics, dict) else None
+        return None, [
+            HealthWarning(
+                source_kind="evals",
+                warning_type=WarningType.UNREADABLE,
+                severity=HealthSeverity.ERROR,
+                detail="metrics.json is unreadable",
+                source_path=str(path),
+            )
+        ]
+    if not isinstance(metrics, dict):
+        return None, [
+            HealthWarning(
+                source_kind="evals",
+                warning_type=WarningType.UNREADABLE,
+                severity=HealthSeverity.ERROR,
+                detail="metrics.json is not a JSON object",
+                source_path=str(path),
+            )
+        ]
+    return metrics, []
 
 
 def load_jsonl_records(path_or_dir: Path | str) -> list[dict[str, Any]]:
     """Read JSONL records from a file or directory; bad local artifacts are ignored."""
 
+    rows, _ = load_jsonl_with_health(path_or_dir, source_kind="jsonl")
+    return rows
+
+
+def load_jsonl_with_health(
+    path_or_dir: Path | str, source_kind: str
+) -> tuple[list[dict[str, Any]], list[HealthWarning]]:
+    """Read JSONL rows and report integrity warnings alongside them.
+
+    An absent source is a healthy fresh-start (no warning, distinguishing "nothing happened
+    yet" from "evidence is unreadable"). A file that cannot be read is an ERROR
+    (``unreadable``); a file with some unparseable lines keeps its valid rows and adds a
+    WARNING (``corrupt_row``). ``detail`` never echoes raw line content — a malformed line may
+    carry a secret — only the file name and a count.
+    """
+
     path = Path(path_or_dir)
+    warnings: list[HealthWarning] = []
     if not path.exists():
-        return []
+        return [], warnings
     files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
     rows: list[dict[str, Any]] = []
     for file_path in files:
         try:
             lines = file_path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
+            warnings.append(
+                HealthWarning(
+                    source_kind=source_kind,
+                    warning_type=WarningType.UNREADABLE,
+                    severity=HealthSeverity.ERROR,
+                    detail=f"could not read {file_path.name}",
+                    source_path=str(file_path),
+                )
+            )
             continue
+        bad = 0
         for line in lines:
             line = line.strip()
             if not line:
@@ -166,11 +268,25 @@ def load_jsonl_records(path_or_dir: Path | str) -> list[dict[str, Any]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
+                bad += 1
                 continue
             if isinstance(row, dict):
                 rows.append(row)
+            else:
+                bad += 1
+        if bad:
+            warnings.append(
+                HealthWarning(
+                    source_kind=source_kind,
+                    warning_type=WarningType.CORRUPT_ROW,
+                    severity=HealthSeverity.WARNING,
+                    detail=f"{bad} malformed line(s) in {file_path.name}",
+                    source_path=str(file_path),
+                    count=bad,
+                )
+            )
     rows.sort(key=lambda r: r.get("created_at", 0.0), reverse=True)
-    return rows
+    return rows, warnings
 
 
 def _summarize_decisions(events: list[dict[str, Any]], limit: int) -> DecisionOverview:

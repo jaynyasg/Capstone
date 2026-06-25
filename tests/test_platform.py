@@ -8,8 +8,157 @@ from pathlib import Path
 from aegis import AegisClient, PolicyMode, Settings
 from aegis.cift import CiftCalibrationRequest, CiftCertificationStore, calibrate_model
 from aegis.platform.evidence import collect_platform_overview, load_trace_events
+from aegis.platform.store import SCHEMA_VERSION, EvidenceQuery
 from tests.conftest import FAKE_GITHUB_PAT
 from tests.test_cift import _passing_metrics
+
+
+def _write_events(traces_dir: Path, count: int, session_id: str = "s1") -> None:
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(
+            {
+                "created_at": float(i),
+                "session_id": session_id,
+                "phase": "response",
+                "input_summary": f"event {i}",
+                "policy_decision": {"action": "ALLOW", "risk_score": 0.0, "detector_hits": []},
+            }
+        )
+        for i in range(count)
+    ]
+    (traces_dir / f"{session_id}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_overview_reports_total_separately_from_bounded_window(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    _write_events(traces, count=30)
+
+    overview = collect_platform_overview(
+        settings=Settings(policy_mode=PolicyMode.BALANCED, traces_dir=traces),
+        provider_name="mock",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=tmp_path / "reports",
+        certifications=[],
+        canaries=[],
+    )
+    body = overview.model_dump()
+
+    assert body["schema_version"] == SCHEMA_VERSION
+    assert body["query"]["limit"] == 25
+    assert body["decisions"]["total"] == 30  # total = all matching records
+    assert len(body["decisions"]["recent"]) == 25  # latest = bounded window
+    assert body["health"]["status"] == "healthy"
+    assert body["snapshot"]["freshness"] == "live"
+
+
+def test_overview_custom_query_limit_bounds_window(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    _write_events(traces, count=30)
+
+    overview = collect_platform_overview(
+        settings=Settings(traces_dir=traces),
+        provider_name="mock",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=tmp_path / "reports",
+        certifications=[],
+        canaries=[],
+        query=EvidenceQuery(limit=10),
+    )
+    body = overview.model_dump()
+
+    assert body["query"]["limit"] == 10
+    assert body["decisions"]["total"] == 30
+    assert len(body["decisions"]["recent"]) == 10
+
+
+def test_overview_corrupt_trace_surfaces_health_but_keeps_valid_evidence(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "bad.jsonl").write_text("{not json}\n{also bad}\n", encoding="utf-8")
+    (traces / "s1.jsonl").write_text(
+        json.dumps(
+            {
+                "created_at": 5.0,
+                "session_id": "s1",
+                "phase": "response",
+                "input_summary": "clean row",
+                "policy_decision": {"action": "BLOCK", "risk_score": 1.0, "detector_hits": []},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    overview = collect_platform_overview(
+        settings=Settings(traces_dir=traces),
+        provider_name="mock",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=tmp_path / "reports",
+        certifications=[],
+        canaries=[],
+    )
+    body = overview.model_dump()
+
+    assert body["decisions"]["total"] == 1  # the valid row survived
+    assert body["decisions"]["recent"][0]["action"] == "BLOCK"
+    assert body["health"]["status"] == "degraded"
+    kinds = {(w["source_kind"], w["warning_type"]) for w in body["health"]["warnings"]}
+    assert ("traces", "corrupt_row") in kinds
+
+
+def test_overview_healthy_empty_is_not_degraded(tmp_path) -> None:
+    overview = collect_platform_overview(
+        settings=Settings(traces_dir=tmp_path / "traces"),
+        provider_name="mock",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=tmp_path / "reports",
+        certifications=[],
+        canaries=[],
+    )
+    body = overview.model_dump()
+
+    # No records exist, but the sources are simply absent — healthy, not degraded.
+    assert body["decisions"]["total"] == 0
+    assert body["health"]["status"] == "healthy"
+    assert body["health"]["warnings"] == []
+
+
+def test_overview_unreadable_trace_is_degraded_not_empty(tmp_path, monkeypatch) -> None:
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    locked = traces / "s1.jsonl"
+    locked.write_text(
+        json.dumps({"created_at": 1.0, "session_id": "s1", "phase": "response"}) + "\n",
+        encoding="utf-8",
+    )
+    original_read_text = Path.read_text
+
+    def read_text_or_lock(self, *args, **kwargs):
+        if self == locked:
+            raise OSError("locked")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text_or_lock)
+
+    overview = collect_platform_overview(
+        settings=Settings(traces_dir=traces),
+        provider_name="mock",
+        braintrust_enabled=False,
+        ml_probe_available=False,
+        reports_dir=tmp_path / "reports",
+        certifications=[],
+        canaries=[],
+    )
+    body = overview.model_dump()
+
+    assert body["health"]["status"] == "degraded"
+    kinds = {(w["source_kind"], w["warning_type"]) for w in body["health"]["warnings"]}
+    assert ("traces", "unreadable") in kinds
 
 
 def test_platform_overview_aggregates_runtime_evidence_without_raw_canaries(
@@ -145,6 +294,15 @@ def test_platform_overview_redacts_untrusted_artifacts_and_degrades(tmp_path) ->
     assert "normalized" not in body["canaries"]["latest"][0]
     assert FAKE_GITHUB_PAT not in str(body)
     assert "unsafe-raw-canary-value" not in str(body)
+
+    # Degradation is now explicit health, not silent emptiness: the corrupt trace line and
+    # the unreadable metrics.json both surface as warnings near their source.
+    assert body["health"]["status"] == "degraded"
+    kinds = {(w["source_kind"], w["warning_type"]) for w in body["health"]["warnings"]}
+    assert ("traces", "corrupt_row") in kinds
+    assert ("evals", "unreadable") in kinds
+    # Health detail must never echo raw artifact content (it could carry a secret).
+    assert FAKE_GITHUB_PAT not in str(body["health"])
 
 
 def test_load_trace_events_skips_unreadable_files(tmp_path, monkeypatch) -> None:

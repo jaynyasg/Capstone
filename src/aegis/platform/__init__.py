@@ -8,8 +8,25 @@ from aegis.platform.evidence import (
     PlatformStatus,
     SessionRiskOverview,
     collect_platform_overview,
+    load_eval_metrics_with_health,
     load_jsonl_records,
+    load_jsonl_with_health,
     load_trace_events,
+)
+from aegis.platform.store import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    SCHEMA_VERSION,
+    EvidenceHealth,
+    EvidenceQuery,
+    EvidenceStore,
+    FreshnessState,
+    HealthSeverity,
+    HealthStatus,
+    HealthWarning,
+    RecordWindow,
+    SnapshotMeta,
+    WarningType,
 )
 
 __all__ = [
@@ -20,6 +37,22 @@ __all__ = [
     "PlatformStatus",
     "SessionRiskOverview",
     "collect_platform_overview",
+    "load_eval_metrics_with_health",
     "load_jsonl_records",
+    "load_jsonl_with_health",
     "load_trace_events",
+    # Contract vocabulary (store.py)
+    "DEFAULT_LIMIT",
+    "MAX_LIMIT",
+    "SCHEMA_VERSION",
+    "EvidenceHealth",
+    "EvidenceQuery",
+    "EvidenceStore",
+    "FreshnessState",
+    "HealthSeverity",
+    "HealthStatus",
+    "HealthWarning",
+    "RecordWindow",
+    "SnapshotMeta",
+    "WarningType",
 ]
