@@ -11,6 +11,9 @@ dependencies = [
     "openai>=1.40",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    # Symmetric encryption for the durable canary vault (KTD7): raw canary tokens are
+    # Fernet-encrypted at rest so restart detection can be restored without exposing them.
+    "cryptography>=43",
 ]
 
 [project.optional-dependencies]

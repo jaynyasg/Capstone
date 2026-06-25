@@ -46,6 +46,7 @@ class AegisClient:
         self.settings = settings or Settings.load()
         self.broker = broker or CredentialBroker()
         self.registry = registry or HoneytokenRegistry()
+        self._maybe_attach_canary_vault()
         self.tracer = tracer or Tracer(self.settings.traces_dir)
         self.policy = PolicyEngine(self.settings.policy_mode)
 
@@ -208,6 +209,7 @@ class AegisClient:
         # Enforce.
         decision = self.policy.decide(results)
         decision = _apply_broker_override(decision, assessment)
+        self._mark_detected_canaries(results)
 
         event = self._build_event(ctx, results, decision, assessment, metadata)
         trace_path = self.tracer.record(event)
@@ -255,6 +257,33 @@ class AegisClient:
             tool_arguments=ctx.tool_arguments,
             trusted_boundary=ctx.trusted_boundary,
         )
+
+    def _maybe_attach_canary_vault(self) -> None:
+        """Attach a durable canary vault when a key is configured or a vault already exists.
+
+        With no key and no existing vault, the registry stays purely in-memory (current
+        behaviour) — durability is opt-in via ``AEGIS_CANARY_VAULT_KEY`` (KTD13). The vault
+        is imported lazily so the SDK has no hard dependency on the platform layer at import.
+        """
+        key = self.settings.canary_vault_key
+        path = self.settings.canary_vault_path
+        if key is None and not path.exists():
+            return
+        from aegis.platform.canaries import CanaryVault
+
+        self.registry.attach_vault(CanaryVault(path, key))
+        self.registry.restore_from_vault()
+
+    def _mark_detected_canaries(self, results: list[DetectorResult]) -> None:
+        """Advance a planted canary to the ``detected`` lifecycle state when it leaks."""
+        for result in results:
+            if (
+                result.detector_name == "honeytoken_detector"
+                and result.recommended_action is not Action.ALLOW
+            ):
+                canary_id = result.evidence.get("canary_id")
+                if canary_id:
+                    self.registry.mark_detected(str(canary_id))
 
 
 def _broker_result(forced: Action | None, handles: list[str]) -> DetectorResult:

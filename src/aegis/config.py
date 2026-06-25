@@ -33,6 +33,9 @@ class Settings:
     enable_ml_probe: bool = False
     ml_probe_path: Path = Path("models/aegis_risk_probe.pt")
     platform_dir: Path | None = None
+    # Operator-provided Fernet key for the durable canary vault. Absent means restart
+    # detection is disabled (degraded) — we never silently mint a throwaway key (KTD13).
+    canary_vault_key: str | None = None
 
     @property
     def platform_state_dir(self) -> Path:
@@ -50,6 +53,11 @@ class Settings:
     def evidence_db_path(self) -> Path:
         """Local SQLite evidence read model."""
         return self.platform_state_dir / "evidence.db"
+
+    @property
+    def canary_vault_path(self) -> Path:
+        """Local durable canary vault (encrypted raw tokens + plaintext safe metadata)."""
+        return self.platform_state_dir / "canary_vault.db"
 
     @classmethod
     def load(cls, policy_path: Path | str = DEFAULT_POLICY_PATH) -> Settings:
@@ -76,4 +84,5 @@ class Settings:
                 os.environ.get("AEGIS_ML_PROBE_PATH", ml.get("path", "models/aegis_risk_probe.pt"))
             ),
             platform_dir=Path(platform_dir_env) if platform_dir_env else None,
+            canary_vault_key=os.environ.get("AEGIS_CANARY_VAULT_KEY", data.get("canary_vault_key")),
         )
