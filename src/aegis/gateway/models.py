@@ -39,6 +39,7 @@ class PlantCanaryBody(BaseModel):
     session_id: str = "gateway"
     service: str
     location: str = "model_context"
+    format_slug: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

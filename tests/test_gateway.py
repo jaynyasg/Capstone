@@ -88,12 +88,15 @@ def test_canary_plant_endpoint_tracks_lifecycle_without_logging_token(tmp_path) 
         },
     )
     body = r.json()
-    assert body["token"].startswith("aegis_canary_github_")
+    assert body["token"].startswith("ghp_")
     assert body["canary_id"]
+    assert body["format_slug"] == "github-ghp"
+    assert body["provider_valid"] is False
     assert body["trace_id"]
 
     listed = c.get("/api/canaries", params={"session_id": "s1"}).json()["canaries"]
     assert listed[0]["canary_id"] == body["canary_id"]
+    assert listed[0]["format_slug"] == "github-ghp"
     assert body["token"] not in str(listed)
 
     leak = c.post(

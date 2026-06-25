@@ -124,6 +124,7 @@ class AegisClient:
         service: str,
         session_id: str = "default",
         location: str = "model_context",
+        format_slug: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CanaryPlant:
         """Create a honeytoken and trace its placement into model-visible context.
@@ -131,7 +132,9 @@ class AegisClient:
         The raw token is returned to the caller so it can be inserted into retrieved
         context or a prompt. Traces store only canary id and placement metadata.
         """
-        token = self.registry.register(service, session_id, plant_location=location)
+        token = self.registry.register(
+            service, session_id, plant_location=location, format_slug=format_slug
+        )
         ht = self.registry.get(token)
         if ht is None:  # defensive; register/get share the same in-memory registry.
             raise RuntimeError("registered canary was not retrievable")
@@ -148,6 +151,10 @@ class AegisClient:
                 "canary_id": ht.canary_id,
                 "service": ht.service,
                 "plant_location": ht.plant_location,
+                "format_slug": ht.format_slug,
+                "provider_valid": ht.provider_valid,
+                "safety_note": ht.safety_note,
+                "spec_hash": ht.spec_hash,
                 "token_logged": False,
             }
         )
@@ -167,13 +174,17 @@ class AegisClient:
             service=ht.service,
             session_id=ht.session_id,
             location=ht.plant_location,
+            format_slug=ht.format_slug,
+            provider_valid=ht.provider_valid,
+            safety_note=ht.safety_note,
             trace_id=event.event_id,
         )
 
     # ----- pipeline ------------------------------------------------------
 
     def _guard(self, ctx: ScanContext, metadata: dict[str, Any] | None) -> AegisDecision:
-        results = [d.scan(ctx) for d in self._content]
+        scan_ctx = self._scanner_context(ctx)
+        results = [d.scan(scan_ctx) for d in self._content]
 
         # Credential broker: raw secret in model-visible context is authoritative.
         assessment = self.broker.assess_context(
@@ -191,7 +202,7 @@ class AegisClient:
         # one more (non-authoritative, WARN-capped) input. Never feeds back into Nimbus.
         if self.ml_probe is not None:
             results.append(
-                self.ml_probe.score(ctx, results, self.nimbus.cumulative(ctx.session_id))
+                self.ml_probe.score(scan_ctx, results, self.nimbus.cumulative(ctx.session_id))
             )
 
         # Enforce.
@@ -229,6 +240,20 @@ class AegisClient:
             detector_evidence=results,
             policy_decision=decision,
             metadata=meta,
+        )
+
+    def _scanner_context(self, ctx: ScanContext) -> ScanContext:
+        if ctx.phase is not Phase.REQUEST:
+            return ctx
+        # Known canaries are allowed at their planting site, even when they imitate
+        # provider credential shapes. Unknown/raw credentials in the same request still scan.
+        return ScanContext(
+            session_id=ctx.session_id,
+            phase=ctx.phase,
+            text=self.registry.redact_text(ctx.text),
+            tool_name=ctx.tool_name,
+            tool_arguments=ctx.tool_arguments,
+            trusted_boundary=ctx.trusted_boundary,
         )
 
 

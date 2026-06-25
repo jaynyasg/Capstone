@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 
 from aegis.contracts import Action, DetectorResult, Phase
 from aegis.detectors.base import ScanContext, timed
+from aegis.secrets.honeytoken_generator import (
+    default_format_for_service,
+    generate_honeytoken,
+)
 
 
 def _normalize(s: str) -> str:
@@ -28,6 +32,10 @@ class Honeytoken:
     canary_id: str
     plant_location: str = "registry"
     planted_at: float = field(default_factory=time.time)
+    format_slug: str = "generic-sk"
+    provider_valid: bool = False
+    safety_note: str = ""
+    spec_hash: str = ""
     normalized: str = field(default="")
 
 
@@ -37,18 +45,28 @@ class HoneytokenRegistry:
     def __init__(self) -> None:
         self._tokens: dict[str, Honeytoken] = {}
 
-    def register(self, service: str, session_id: str, plant_location: str = "registry") -> str:
+    def register(
+        self,
+        service: str,
+        session_id: str,
+        plant_location: str = "registry",
+        format_slug: str | None = None,
+    ) -> str:
         canary_id = f"ht_{uuid.uuid4().hex[:8]}"
-        token = f"aegis_canary_{service}_{uuid.uuid4().hex[:12]}"
-        self._tokens[token] = Honeytoken(
-            token=token,
+        generated = generate_honeytoken(format_slug or default_format_for_service(service))
+        self._tokens[generated.token] = Honeytoken(
+            token=generated.token,
             service=service,
             session_id=session_id,
             canary_id=canary_id,
             plant_location=plant_location,
-            normalized=_normalize(token),
+            format_slug=generated.format_slug,
+            provider_valid=generated.provider_valid,
+            safety_note=generated.safety_note,
+            spec_hash=generated.spec_hash,
+            normalized=_normalize(generated.token),
         )
-        return token
+        return generated.token
 
     def get(self, token: str) -> Honeytoken | None:
         return self._tokens.get(token)
@@ -70,6 +88,10 @@ class HoneytokenRegistry:
                 "session_id": ht.session_id,
                 "plant_location": ht.plant_location,
                 "planted_at": ht.planted_at,
+                "format_slug": ht.format_slug,
+                "provider_valid": ht.provider_valid,
+                "safety_note": ht.safety_note,
+                "spec_hash": ht.spec_hash,
             }
             for ht in records
         ]

@@ -73,6 +73,8 @@ def test_canary_plant_is_traced_and_later_detection_links_to_it(tmp_path) -> Non
     assert plant_event["metadata"]["canary_id"] == planted.canary_id
     assert plant_event["metadata"]["service"] == "github"
     assert plant_event["metadata"]["plant_location"] == "retrieved_document:doc-7"
+    assert plant_event["metadata"]["format_slug"] == "github-ghp"
+    assert plant_event["metadata"]["provider_valid"] is False
     assert plant_event["metadata"]["token_logged"] is False
 
     decision = client.guard_response(f"leaked canary {planted.token}", session_id="s1")

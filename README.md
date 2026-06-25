@@ -97,13 +97,18 @@ plant = aegis.plant_canary(
     service="github",
     session_id="demo-1",
     location="retrieved_document:vendor-email-7",
+    format_slug="github-ghp",  # optional; GitHub is the default shape for this service
 )
 messages.append({"role": "system", "content": f"Audit marker: {plant.token}"})
 ```
 
-The raw token is returned to the caller for placement, but traces store only the
-`canary_id`, service, session, and placement location. If that token later appears in model
-output or a tool argument, the detector evidence links the leak back to the same `canary_id`.
+Honeytokens use the DP-HONEY-style shape generator from `CapstoneHoney`: they can mimic
+provider credential families such as GitHub, OpenAI, Slack, Stripe, AWS, and Twilio, while
+remaining shape-only synthetic values. The raw token is returned to the caller for
+placement, but traces store only safe metadata such as `canary_id`, service, session,
+placement location, `format_slug`, `provider_valid=false`, and the format spec hash. If
+that token later appears in model output or a tool argument, the detector evidence links
+the leak back to the same `canary_id`.
 
 ## Run as a service (gateway)
 
@@ -117,8 +122,8 @@ route through it instead of embedding `AegisClient`, and every call accumulates 
 | `GET /health` | Liveness + active policy mode, provider, Braintrust/ML-probe status |
 | `POST /v1/chat/completions` | Full proxy: guard request → provider → guard tool calls + response |
 | `POST /guard/request` · `/guard/tool_call` · `/guard/response` | Direct SDK guards over HTTP, return an `AegisDecision` |
-| `POST /canaries/plant` | Create a honeytoken, trace its model-visible placement, and return the token to plant |
-| `GET /api/canaries` | Safe canary inventory (`canary_id`, service, session, placement; no raw token) |
+| `POST /canaries/plant` | Create a honeytoken, optionally with `format_slug`, trace its model-visible placement, and return the token to plant |
+| `GET /api/canaries` | Safe canary inventory (`canary_id`, service, session, placement, format metadata; no raw token) |
 | `POST /cift/calibrate` | Record a model-specific CIFT/gateway calibration certificate |
 | `GET /api/cift/certifications` | Recent calibration certificates by hosted model |
 | `GET /api/decisions` | Recent decisions as JSON |

@@ -138,7 +138,11 @@ def create_app(
     @app.post("/canaries/plant")
     def plant_canary(body: PlantCanaryBody) -> dict[str, Any]:
         return client.plant_canary(
-            body.service, body.session_id, body.location, body.metadata
+            body.service,
+            body.session_id,
+            body.location,
+            body.format_slug,
+            body.metadata,
         ).model_dump()
 
     @app.get("/api/canaries")

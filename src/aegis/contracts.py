@@ -97,6 +97,9 @@ class CanaryPlant(BaseModel):
     service: str
     session_id: str
     location: str
+    format_slug: str
+    provider_valid: bool = False
+    safety_note: str = ""
     trace_id: str | None = None
 
 

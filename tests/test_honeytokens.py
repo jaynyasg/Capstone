@@ -36,7 +36,7 @@ def test_unregistered_value_allows() -> None:
     reg.register(service="github", session_id="s1")
     detector = HoneytokenDetector(reg)
 
-    result = detector.scan(response_ctx("aegis_canary_github_deadbeef_unregistered"))
+    result = detector.scan(response_ctx("ghp_deadbeef_unregistered"))
     assert result.recommended_action == Action.ALLOW
     assert result.score == 0.0
 
@@ -70,7 +70,7 @@ def test_token_only_visible_in_untrusted_context() -> None:
     # Registry exposes the raw token so it can be planted; detection is the point.
     reg = HoneytokenRegistry()
     token = reg.register(service="github", session_id="s1")
-    assert token.startswith("aegis_canary_")
+    assert token.startswith("ghp_")
     assert reg.is_canary(token)
 
 
@@ -82,6 +82,8 @@ def test_registry_exposes_safe_canary_records_without_token() -> None:
     assert record["service"] == "github"
     assert record["session_id"] == "s1"
     assert record["plant_location"] == "retrieved_doc"
+    assert record["format_slug"] == "github-ghp"
+    assert record["provider_valid"] is False
     assert record["canary_id"]
     assert token not in str(record)
 
