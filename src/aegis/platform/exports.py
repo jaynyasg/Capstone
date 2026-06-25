@@ -124,7 +124,9 @@ def _scope_line(query: dict[str, Any]) -> str:
     for key in ("session_id", "action", "phase", "detector", "model_id", "since", "until"):
         value = query.get(key)
         if value is not None:
-            parts.append(f"{key}={value}")
+            # Neutralise newlines/pipes so a crafted filter value can't inject Markdown
+            # structure into the audit bundle's scope line (same guard as table cells).
+            parts.append(f"{key}={_cell(value)}")
     return ", ".join(parts)
 
 

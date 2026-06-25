@@ -15,7 +15,9 @@ stack, boundaries, and the claim list that defines "done".
 ## Hard boundaries (non-goals — do NOT build)
 - No production secret manager / rotation / IAM. Local fake store (env or JSON) only. (The
   canary vault's local `cryptography`/Fernet encryption protects canary tokens at rest — it is
-  NOT a secret manager; the key is operator-provided via `AEGIS_CANARY_VAULT_KEY`, never minted.)
+  NOT a secret manager; the key is operator-provided via `AEGIS_CANARY_VAULT_KEY`, never minted.
+  The SQLite evidence store is a local, rebuildable read model for redacted guard-decision
+  metadata — it holds no raw secrets and replaces no real secret manager or hosted database.)
 - No LLM-as-only-detector. Deterministic detectors are authoritative for blocking.
 - No PyTorch/CIFT as a hard dependency. ML probe is an optional *signal*, never the owner.
 - No CI/CD, no SaaS/tenancy/RBAC/billing. Local-run + Stop-hook gate is the safety net.

@@ -131,7 +131,11 @@ class HoneytokenRegistry:
         """Reload decryptable canaries from the vault into memory (idempotent)."""
         if self._vault is None:
             return
-        for rec in self._vault.restore():
+        try:
+            records = self._vault.restore()
+        except Exception:  # noqa: BLE001 - vault restore must never break client startup
+            return
+        for rec in records:
             token = rec.get("token")
             if not token or token in self._tokens:
                 continue

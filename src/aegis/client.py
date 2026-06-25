@@ -269,10 +269,13 @@ class AegisClient:
         path = self.settings.canary_vault_path
         if key is None and not path.exists():
             return
-        from aegis.platform.canaries import CanaryVault
+        try:
+            from aegis.platform.canaries import CanaryVault
 
-        self.registry.attach_vault(CanaryVault(path, key))
-        self.registry.restore_from_vault()
+            self.registry.attach_vault(CanaryVault(path, key))
+            self.registry.restore_from_vault()
+        except Exception:  # noqa: BLE001 - durable-canary setup must never break the guard path
+            pass
 
     def _mark_detected_canaries(self, results: list[DetectorResult]) -> None:
         """Advance a planted canary to the ``detected`` lifecycle state when it leaks."""

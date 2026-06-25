@@ -145,3 +145,19 @@ def test_detection_advances_lifecycle_to_detected(tmp_path) -> None:
     records = restarted.registry.safe_records("s1")
     [record] = [r for r in records if r["canary_id"] == plant.canary_id]
     assert record["lifecycle_state"] == "detected"
+
+
+def test_corrupt_vault_db_degrades_without_crashing_guard_path(tmp_path) -> None:
+    key = Fernet.generate_key().decode()
+    settings = _settings(tmp_path, key)
+    AegisClient(settings=settings).plant_canary("github", session_id="s1")
+
+    # The vault file is corrupted entirely (e.g. a half-restored backup, not just a bad row).
+    settings.canary_vault_path.write_bytes(b"this is not a valid sqlite database at all")
+
+    # A new client must still construct and guard normally — durable-canary storage failure
+    # degrades visibly, it does not brick the guard path.
+    restarted = AegisClient(settings=settings)
+    assert restarted.guard_response("a benign message", session_id="s1").action == Action.ALLOW
+    warnings = restarted.registry.health_warnings()
+    assert any(w.warning_type is WarningType.DEGRADED for w in warnings)

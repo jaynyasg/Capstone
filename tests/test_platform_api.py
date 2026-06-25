@@ -106,9 +106,11 @@ def test_api_and_export_preserve_secret_redaction(tmp_path) -> None:
     c.post("/guard/response", json={"session_id": "s1", "output": f"the key is {FAKE_GITHUB_PAT}"})
 
     decisions = c.get("/api/platform/decisions", params={"session_id": "s1"})
-    export = c.get("/api/platform/export", params={"format": "json", "session_id": "s1"})
+    export_json = c.get("/api/platform/export", params={"format": "json", "session_id": "s1"})
+    export_md = c.get("/api/platform/export", params={"format": "md", "session_id": "s1"})
     assert FAKE_GITHUB_PAT not in decisions.text
-    assert FAKE_GITHUB_PAT not in export.text
+    assert FAKE_GITHUB_PAT not in export_json.text
+    assert FAKE_GITHUB_PAT not in export_md.text  # markdown export must redact too
 
 
 def test_corrupt_source_surfaces_in_health_and_export(tmp_path) -> None:
@@ -132,9 +134,12 @@ def test_overview_snapshot_is_cached_within_window(tmp_path) -> None:
 
     first = c.get("/api/platform/overview").json()
     second = c.get("/api/platform/overview").json()
-    # Two rapid default requests reuse one snapshot (< 5s refresh window).
+    # Two rapid default requests reuse one snapshot (< 5s refresh window): the first builds
+    # it (live), the second is served from cache. Asserting == "cached" (not a permissive set)
+    # makes the test fail if caching regresses to rebuilding every request.
     assert first["snapshot"]["generated_at"] == second["snapshot"]["generated_at"]
-    assert second["snapshot"]["freshness"] in {"live", "cached"}
+    assert first["snapshot"]["freshness"] == "live"
+    assert second["snapshot"]["freshness"] == "cached"
 
     # A filtered overview bypasses the cache and is freshly built.
     filtered = c.get("/api/platform/overview", params={"session_id": "s1"}).json()

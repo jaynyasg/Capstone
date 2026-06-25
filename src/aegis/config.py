@@ -93,7 +93,9 @@ class Settings:
                 os.environ.get("AEGIS_ML_PROBE_PATH", ml.get("path", "models/aegis_risk_probe.pt"))
             ),
             platform_dir=Path(platform_dir_env) if platform_dir_env else None,
-            canary_vault_key=os.environ.get("AEGIS_CANARY_VAULT_KEY", data.get("canary_vault_key")),
+            # Env-only on purpose: never source the at-rest encryption key from the
+            # git-tracked policy.yaml, or committing it would defeat the vault.
+            canary_vault_key=os.environ.get("AEGIS_CANARY_VAULT_KEY"),
             snapshot_refresh_seconds=float(
                 os.environ.get(
                     "AEGIS_SNAPSHOT_REFRESH_SECONDS", data.get("snapshot_refresh_seconds", 5.0)

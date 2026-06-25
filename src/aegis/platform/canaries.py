@@ -71,17 +71,24 @@ class CanaryVault:
 
     def __init__(self, path: Path | str, key: str | None) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._key_provided = bool(key)
         self._fernet = _make_fernet(key)
         self._row_warnings: list[HealthWarning] = []
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
+        self._available = True
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self._connect() as conn:
+                conn.executescript(_SCHEMA)
+        except (sqlite3.Error, OSError):
+            # A corrupt, locked, or unwritable vault file must degrade VISIBLY, never crash
+            # the guard path: disable persistence and report degraded health instead of
+            # propagating out of AegisClient.__init__ (which would brick every guard call).
+            self._available = False
 
     @property
     def can_persist(self) -> bool:
-        """Whether tokens can be encrypted (a usable key + cryptography are available)."""
-        return self._fernet is not None
+        """Whether tokens can be encrypted (storage usable + a key + cryptography available)."""
+        return self._available and self._fernet is not None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -113,6 +120,8 @@ class CanaryVault:
         spec_hash: str,
     ) -> None:
         """Persist a planted canary. Token is encrypted only when a key is available."""
+        if not self._available:
+            return
         cipher = self._fernet.encrypt(token.encode("utf-8")) if self._fernet else None
         with self._connect() as conn:
             conn.execute(
@@ -142,6 +151,8 @@ class CanaryVault:
         self._set_lifecycle(canary_id, EXPIRED)
 
     def _set_lifecycle(self, canary_id: str, state: str) -> None:
+        if not self._available:
+            return
         with self._connect() as conn:
             conn.execute(
                 "UPDATE canaries SET lifecycle_state=? WHERE canary_id=?", (state, canary_id)
@@ -151,6 +162,8 @@ class CanaryVault:
 
     def safe_records(self, session_id: str | None = None) -> list[dict[str, Any]]:
         """Plaintext safe metadata only — never the token. Readable without a key."""
+        if not self._available:
+            return []
         clause = " WHERE session_id=?" if session_id is not None else ""
         params = (session_id,) if session_id is not None else ()
         with self._connect() as conn:
@@ -169,7 +182,7 @@ class CanaryVault:
         no key was configured) are skipped — their safe metadata stays visible.
         """
         self._row_warnings = []
-        if self._fernet is None:
+        if not self._available or self._fernet is None:
             return []
         restored: list[dict[str, Any]] = []
         with self._connect() as conn:
@@ -199,8 +212,19 @@ class CanaryVault:
         return restored
 
     def health_warnings(self) -> list[HealthWarning]:
-        """Degraded/corrupt warnings: key-loss disables restart detection; bad rows warn."""
+        """Degraded/corrupt warnings: storage loss or key-loss disables restart detection."""
         warnings = list(self._row_warnings)
+        if not self._available:
+            warnings.append(
+                HealthWarning(
+                    source_kind="canaries",
+                    warning_type=WarningType.DEGRADED,
+                    severity=HealthSeverity.ERROR,
+                    detail="canary vault storage is unavailable or unreadable: "
+                    "restart detection degraded",
+                )
+            )
+            return warnings
         if self._fernet is None and (self._key_provided or self._row_count() > 0):
             warnings.append(
                 HealthWarning(

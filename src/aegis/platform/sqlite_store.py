@@ -130,6 +130,15 @@ class SqliteEvidenceStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._init_schema()
+        except sqlite3.DatabaseError:
+            # evidence.db is a rebuildable cache (re-imported from JSONL); a corrupt file must
+            # not brick the gateway — recreate it once rather than propagating the error.
+            self.path.unlink(missing_ok=True)
+            self._init_schema()
+
+    def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             if conn.execute("PRAGMA user_version").fetchone()[0] < LOCAL_SCHEMA_VERSION:
