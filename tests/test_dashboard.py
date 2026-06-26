@@ -137,8 +137,8 @@ def test_renders_platform_cockpit_from_contract() -> None:
 
 def test_renders_nimbus_rankings_sorted_by_score() -> None:
     h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
-    section = h.split('data-section="nimbus-rankings">Nimbus rankings</div>', 1)[1].split(
-        'data-section="recent-decisions">Recent decisions</div>', 1
+    section = h.split('data-section="nimbus-rankings"', 1)[1].split(
+        'data-section="recent-decisions"', 1
     )[0]
 
     assert "Nimbus rankings" in h
@@ -148,11 +148,16 @@ def test_renders_nimbus_rankings_sorted_by_score() -> None:
 
 
 def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
-    h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
+    h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES, auto_refresh=5)
 
     assert 'id="walkthrough-run"' in h
     assert "Run walkthrough" in h
     assert 'id="walkthrough-status"' in h
+    assert 'id="dashboard-auto-refresh"' in h
+    assert 'name="aegis-auto-refresh"' in h
+    assert "const autoRefreshMs = 5000;" in h
+    assert "Live refresh is paused during this walkthrough." in h
+    assert 'class="walkthrough-steps"' in h
     assert "walkthrough-active" in h
     for section_key in [
         "evidence-health",
@@ -265,9 +270,12 @@ def test_empty_platform_does_not_crash() -> None:
     assert "No decisions recorded yet" in h
 
 
-def test_auto_refresh_meta_only_when_requested() -> None:
-    assert 'http-equiv="refresh"' not in render_html(SAMPLE_PLATFORM)
-    assert 'http-equiv="refresh"' in render_html(SAMPLE_PLATFORM, auto_refresh=5)
+def test_auto_refresh_marker_only_when_requested() -> None:
+    assert 'id="dashboard-auto-refresh"' not in render_html(SAMPLE_PLATFORM)
+    h = render_html(SAMPLE_PLATFORM, auto_refresh=5)
+    assert 'id="dashboard-auto-refresh"' in h
+    assert 'http-equiv="refresh"' not in h
+    assert "window.location.reload();" in h
 
 
 def test_recent_decisions_ordered_by_timestamp(tmp_path) -> None:

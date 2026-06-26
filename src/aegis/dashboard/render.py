@@ -90,14 +90,24 @@ tr:last-child td{border-bottom:none}
 .walkthrough-btn:hover{background:#005ea222}
 .walkthrough-btn:disabled{cursor:wait;color:var(--muted);border-color:var(--border)}
 .walkthrough-btn:focus-visible{outline:2px solid var(--sanitize);outline-offset:2px}
-.walkthrough-active{outline:2px solid var(--accent);outline-offset:6px;color:var(--fg)}
+.dashboard-section{border-radius:8px;padding:1px 0;margin:0 0 4px;scroll-margin:24px}
+.dashboard-section.walkthrough-active{outline:3px solid var(--accent);outline-offset:6px;
+  background:#005ea214;box-shadow:0 0 0 9999px #00000026,0 0 32px #005ea255;color:var(--fg)}
+.dashboard-section.walkthrough-active .card,.dashboard-section.walkthrough-active table{background:#101820}
 .walkthrough-status{position:fixed;right:18px;bottom:18px;z-index:20;display:none;
   max-width:min(360px,calc(100vw - 36px));border:1px solid var(--accent);border-radius:8px;
   background:#0d0d0df2;box-shadow:0 12px 40px #0008;padding:12px 14px}
 .walkthrough-status.active{display:block}
 .walkthrough-title{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em}
-.walkthrough-copy{font-size:12px;color:var(--muted);margin-top:4px}
-@media (prefers-reduced-motion: reduce){.walkthrough-active{outline-offset:4px}}
+.walkthrough-copy{font-size:13px;color:var(--fg);margin-top:4px}
+.walkthrough-note{font-size:12px;color:var(--muted);margin-top:6px}
+.walkthrough-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:10px}
+.walkthrough-step{border:1px solid var(--border);border-radius:6px;padding:5px 6px;
+  color:var(--muted);font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.walkthrough-step.active{border-color:var(--accent);background:#005ea222;color:var(--fg)}
+.walkthrough-step.done{border-color:#2ea04366;color:var(--allow)}
+@media (prefers-reduced-motion: reduce){.dashboard-section.walkthrough-active{outline-offset:4px}}
+@media (max-width:640px){.walkthrough-steps{grid-template-columns:1fr}}
 """
 
 _WALKTHROUGH_STEPS = [
@@ -423,24 +433,30 @@ def _nimbus_rankings(data: dict[str, Any]) -> str:
     )
 
 
-def _walkthrough_script() -> str:
+def _walkthrough_script(auto_refresh: int = 0) -> str:
     steps = json.dumps(
         [
             {"key": key, "title": title, "copy": copy}
             for key, title, copy in _WALKTHROUGH_STEPS
         ]
     )
+    refresh_ms = max(0, int(auto_refresh or 0)) * 1000
     return f"""
 <script>
 (() => {{
   const steps = {steps};
-  const intervalMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 900 : 1500;
+  const intervalMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 1200 : 2400;
+  const autoRefreshMs = {refresh_ms};
   const button = document.getElementById("walkthrough-run");
   const panel = document.getElementById("walkthrough-status");
+  const refreshMeta = document.getElementById("dashboard-auto-refresh");
   if (!button || !panel) return;
   const title = panel.querySelector(".walkthrough-title");
   const copy = panel.querySelector(".walkthrough-copy");
+  const note = panel.querySelector(".walkthrough-note");
+  const stepList = panel.querySelector(".walkthrough-steps");
   let timer = null;
+  let refreshTimer = null;
 
   function clearActive() {{
     document.querySelectorAll(".walkthrough-active").forEach((el) => {{
@@ -448,23 +464,64 @@ def _walkthrough_script() -> str:
     }});
   }}
 
+  function renderStepList(activeIndex = -1) {{
+    if (!stepList) return;
+    stepList.innerHTML = "";
+    steps.forEach((step, index) => {{
+      const item = document.createElement("div");
+      item.className = "walkthrough-step";
+      if (index < activeIndex) item.classList.add("done");
+      if (index === activeIndex) item.classList.add("active");
+      item.textContent = `${{index + 1}}. ${{step.title}}`;
+      stepList.appendChild(item);
+    }});
+  }}
+
+  function scheduleRefresh() {{
+    if (!autoRefreshMs || refreshTimer) return;
+    if (refreshMeta) refreshMeta.setAttribute("data-state", "running");
+    refreshTimer = window.setTimeout(() => {{
+      window.location.reload();
+    }}, autoRefreshMs);
+  }}
+
+  function pauseRefresh() {{
+    if (refreshTimer) {{
+      window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }}
+    if (refreshMeta) refreshMeta.setAttribute("data-state", "paused");
+  }}
+
+  function resumeRefresh() {{
+    scheduleRefresh();
+  }}
+
   function showStep(index) {{
     const step = steps[index];
-    const label = document.querySelector(`[data-section="${{step.key}}"]`);
-    if (!label) return;
+    const section = document.querySelector(`[data-section="${{step.key}}"]`);
+    if (!section) return;
     clearActive();
-    label.classList.add("walkthrough-active");
+    section.classList.add("walkthrough-active");
     title.textContent = `${{index + 1}}/${{steps.length}} · ${{step.title}}`;
     copy.textContent = step.copy;
+    if (note) note.textContent = "Live refresh is paused during this walkthrough.";
+    renderStepList(index);
     panel.classList.add("active");
-    label.scrollIntoView({{ behavior: intervalMs < 1000 ? "auto" : "smooth", block: "center" }});
+    button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
+    section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
   }}
 
   function finish() {{
     window.clearInterval(timer);
     timer = null;
+    resumeRefresh();
     button.disabled = false;
     button.textContent = "Run walkthrough";
+    if (title) title.textContent = "Walkthrough complete";
+    if (copy) copy.textContent = "All operator sections were shown.";
+    if (note) note.textContent = "Live refresh has resumed.";
+    renderStepList(steps.length);
     window.setTimeout(() => {{
       clearActive();
       panel.classList.remove("active");
@@ -473,6 +530,7 @@ def _walkthrough_script() -> str:
 
   button.addEventListener("click", () => {{
     if (timer) window.clearInterval(timer);
+    pauseRefresh();
     button.disabled = true;
     button.textContent = "Running...";
     let index = 0;
@@ -486,6 +544,8 @@ def _walkthrough_script() -> str:
       showStep(index);
     }}, intervalMs);
   }});
+  renderStepList();
+  scheduleRefresh();
 }})();
 </script>
 """
@@ -509,7 +569,11 @@ def render_html(
     m = evals.get(headline) if isinstance(evals, dict) else None
 
     mode_badge = f'{nav_html}{_freshness_badge(snapshot)}<span class="mode">policy: {_esc(headline)}</span>'
-    refresh_meta = f'<meta http-equiv="refresh" content="{auto_refresh}">' if auto_refresh else ""
+    refresh_meta = (
+        f'<meta id="dashboard-auto-refresh" name="aegis-auto-refresh" content="{auto_refresh}">'
+        if auto_refresh
+        else ""
+    )
 
     if m:
         kpis, criteria, distribution = _kpis(m), _criteria(m), _distribution(m)
@@ -528,38 +592,58 @@ def render_html(
 <div id="walkthrough-status" class="walkthrough-status" aria-live="polite">
   <div class="walkthrough-title">Walkthrough</div>
   <div class="walkthrough-copy">Ready.</div>
+  <div class="walkthrough-note">Click Run walkthrough to start.</div>
+  <div class="walkthrough-steps" aria-label="Walkthrough steps"></div>
 </div>
 
-<div class="label" data-section="evidence-health">Evidence health</div>
+<section class="dashboard-section" data-section="evidence-health">
+<div class="label">Evidence health</div>
 {_health_panel(health)}
+</section>
 
-<div class="label" data-section="investigate">Investigate (drilldowns → platform API)</div>
+<section class="dashboard-section" data-section="investigate">
+<div class="label">Investigate (drilldowns → platform API)</div>
 {_drilldowns(data)}
+</section>
 
-<div class="label" data-section="platform-cockpit">Platform cockpit</div>
+<section class="dashboard-section" data-section="platform-cockpit">
+<div class="label">Platform cockpit</div>
 {_platform(data)}
+</section>
 
-<div class="label" data-section="nimbus-rankings">Nimbus rankings</div>
+<section class="dashboard-section" data-section="nimbus-rankings">
+<div class="label">Nimbus rankings</div>
 {_nimbus_rankings(data)}
+</section>
 
-<div class="label" data-section="recent-decisions">Recent decisions</div>
+<section class="dashboard-section" data-section="recent-decisions">
+<div class="label">Recent decisions</div>
 {_decisions(decisions, health)}
+</section>
 
-<div class="label" data-section="eval-summary">Eval summary ({_esc(headline)})</div>
+<section class="dashboard-section" data-section="eval-summary">
+<div class="label">Eval summary ({_esc(headline)})</div>
 {kpis}
+</section>
 
-<div class="label" data-section="success-criteria">Success criteria</div>
+<section class="dashboard-section" data-section="success-criteria">
+<div class="label">Success criteria</div>
 {criteria}
+</section>
 
-<div class="label" data-section="baseline-vs-protected">Baseline vs protected</div>
+<section class="dashboard-section" data-section="baseline-vs-protected">
+<div class="label">Baseline vs protected</div>
 {_baseline_table(cases)}
+</section>
 
-<div class="label" data-section="detector-hit-distribution">Detector hit distribution</div>
+<section class="dashboard-section" data-section="detector-hit-distribution">
+<div class="label">Detector hit distribution</div>
 <div class="card">{distribution}</div>
+</section>
 
 <div class="hr"></div>
 <div class="empty">Generated by <span class="mono">aegis-dashboard</span> — export an audit bundle at <span class="mono">/api/platform/export?format=md</span>.</div>
-{_walkthrough_script()}
+{_walkthrough_script(auto_refresh)}
 </body></html>
 """
 

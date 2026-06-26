@@ -58,12 +58,12 @@ def _section_clip(page: Any, section_key: str) -> dict[str, float]:
     clip = page.evaluate(
         """
         (sectionKey) => {
-          const label = document.querySelector(`[data-section="${sectionKey}"]`);
-          if (!label) throw new Error(`missing section: ${sectionKey}`);
-          const labels = Array.from(document.querySelectorAll(".label"));
-          const index = labels.indexOf(label);
-          const next = labels[index + 1];
-          const rect = label.getBoundingClientRect();
+          const section = document.querySelector(`section[data-section="${sectionKey}"]`);
+          if (!section) throw new Error(`missing section: ${sectionKey}`);
+          const sections = Array.from(document.querySelectorAll("section.dashboard-section"));
+          const index = sections.indexOf(section);
+          const next = sections[index + 1];
+          const rect = section.getBoundingClientRect();
           const nextRect = next ? next.getBoundingClientRect() : null;
           const pageHeight = Math.max(
             document.body.scrollHeight,
@@ -119,7 +119,9 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(button).to_be_visible()
 
             for section_key in SECTION_KEYS:
-                label = page.locator(f'[data-section="{section_key}"]')
+                section = page.locator(f'section[data-section="{section_key}"]')
+                sync_api.expect(section).to_be_visible()
+                label = section.locator(".label")
                 sync_api.expect(label).to_be_visible()
                 styles = label.evaluate(
                     """
@@ -143,11 +145,24 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
                 page.screenshot(path=screenshot, clip=clip, full_page=True)
                 assert screenshot.stat().st_size > 1_000
 
+            refresh_path = tmp_path / "dashboard-refresh.html"
+            refresh_path.write_text(
+                render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES, auto_refresh=2),
+                encoding="utf-8",
+            )
+            page.goto(refresh_path.as_uri())
+            button = page.locator("#walkthrough-run")
+            sync_api.expect(button).to_be_visible()
             button.click()
             sync_api.expect(page.locator("#walkthrough-status.active")).to_be_visible()
             sync_api.expect(
-                page.locator('[data-section="evidence-health"].walkthrough-active')
+                page.locator('section[data-section="evidence-health"].walkthrough-active')
             ).to_be_visible()
+            assert page.locator("#dashboard-auto-refresh").get_attribute("data-state") == "paused"
+            page.wait_for_timeout(2500)
+            sync_api.expect(page.locator("#walkthrough-status.active")).to_be_visible()
+            sync_api.expect(page.locator("#walkthrough-run")).to_contain_text("Running")
+            sync_api.expect(page.locator(".walkthrough-step.active")).to_be_visible()
             active_path = artifact_dir / "walkthrough-first-step.png"
             page.screenshot(path=active_path, full_page=False)
             assert active_path.stat().st_size > 1_000

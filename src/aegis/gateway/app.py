@@ -348,7 +348,7 @@ def create_app(
             '<a href="/try" style="font-size:13px;color:#005ea2;margin-right:14px">'
             "Test console →</a>"
         )
-        # The cache refreshes within its window; the meta-refresh keeps the feed live.
+        # The cache refreshes within its window; the dashboard timer keeps the feed live.
         return render_html(
             platform.model_dump(),
             cases=cases,
