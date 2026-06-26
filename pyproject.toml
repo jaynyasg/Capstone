@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 braintrust = ["braintrust>=0.0.150"]
 ml = ["torch>=2.2"]
+visual = ["playwright>=1.45"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -46,6 +47,7 @@ addopts = "-q"
 # Live/networked tests are opt-in only; the Stop-hook gate runs offline.
 markers = [
     "live: requires a real LLM provider / network (excluded from the offline verify gate)",
+    "visual: requires Playwright and a local browser (excluded from the offline verify gate)",
 ]
 
 [tool.ruff]

@@ -44,7 +44,9 @@ a{color:var(--accent)}
 header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
 h1{font-size:18px;font-weight:600;letter-spacing:-0.01em}
 .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
-.label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#8a8a8a99;margin:28px 0 12px}
+.header-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.label{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--fg);
+  margin:30px 0 14px;padding-left:10px;border-left:3px solid var(--accent);line-height:1.1}
 .card{border:1px solid var(--border);background:var(--bg);border-radius:8px;padding:16px}
 .card.degraded{border-color:var(--block)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
@@ -83,7 +85,40 @@ tr:last-child td{border-bottom:none}
 .sev.info{color:var(--muted);background:#8a8a8a22}
 .rank{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .score{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:600}
+.walkthrough-btn{border:1px solid var(--accent);background:transparent;color:var(--fg);border-radius:6px;
+  padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer}
+.walkthrough-btn:hover{background:#005ea222}
+.walkthrough-btn:disabled{cursor:wait;color:var(--muted);border-color:var(--border)}
+.walkthrough-btn:focus-visible{outline:2px solid var(--sanitize);outline-offset:2px}
+.walkthrough-active{outline:2px solid var(--accent);outline-offset:6px;color:var(--fg)}
+.walkthrough-status{position:fixed;right:18px;bottom:18px;z-index:20;display:none;
+  max-width:min(360px,calc(100vw - 36px));border:1px solid var(--accent);border-radius:8px;
+  background:#0d0d0df2;box-shadow:0 12px 40px #0008;padding:12px 14px}
+.walkthrough-status.active{display:block}
+.walkthrough-title{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em}
+.walkthrough-copy{font-size:12px;color:var(--muted);margin-top:4px}
+@media (prefers-reduced-motion: reduce){.walkthrough-active{outline-offset:4px}}
 """
+
+_WALKTHROUGH_STEPS = [
+    ("evidence-health", "Evidence health", "Check whether the evidence is healthy, stale, or degraded."),
+    (
+        "investigate",
+        "Investigate",
+        "Jump into sessions, actions, phases, detectors, and model evidence.",
+    ),
+    ("platform-cockpit", "Platform cockpit", "Review runtime, canary, CIFT, and session state."),
+    ("nimbus-rankings", "Nimbus rankings", "Rank sessions by cumulative Nimbus leakage risk."),
+    ("recent-decisions", "Recent decisions", "Inspect the latest guarded decisions and detectors."),
+    ("eval-summary", "Eval summary", "Confirm current eval metrics for the selected policy view."),
+    ("success-criteria", "Success criteria", "See which success checks are passing."),
+    ("baseline-vs-protected", "Baseline vs protected", "Compare vulnerable baseline behavior to Aegis."),
+    (
+        "detector-hit-distribution",
+        "Detector hit distribution",
+        "Scan which detectors are carrying the evidence.",
+    ),
+]
 
 _ACTION_COLOR = {
     "ALLOW": "var(--allow)",
@@ -388,6 +423,74 @@ def _nimbus_rankings(data: dict[str, Any]) -> str:
     )
 
 
+def _walkthrough_script() -> str:
+    steps = json.dumps(
+        [
+            {"key": key, "title": title, "copy": copy}
+            for key, title, copy in _WALKTHROUGH_STEPS
+        ]
+    )
+    return f"""
+<script>
+(() => {{
+  const steps = {steps};
+  const intervalMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 900 : 1500;
+  const button = document.getElementById("walkthrough-run");
+  const panel = document.getElementById("walkthrough-status");
+  if (!button || !panel) return;
+  const title = panel.querySelector(".walkthrough-title");
+  const copy = panel.querySelector(".walkthrough-copy");
+  let timer = null;
+
+  function clearActive() {{
+    document.querySelectorAll(".walkthrough-active").forEach((el) => {{
+      el.classList.remove("walkthrough-active");
+    }});
+  }}
+
+  function showStep(index) {{
+    const step = steps[index];
+    const label = document.querySelector(`[data-section="${{step.key}}"]`);
+    if (!label) return;
+    clearActive();
+    label.classList.add("walkthrough-active");
+    title.textContent = `${{index + 1}}/${{steps.length}} · ${{step.title}}`;
+    copy.textContent = step.copy;
+    panel.classList.add("active");
+    label.scrollIntoView({{ behavior: intervalMs < 1000 ? "auto" : "smooth", block: "center" }});
+  }}
+
+  function finish() {{
+    window.clearInterval(timer);
+    timer = null;
+    button.disabled = false;
+    button.textContent = "Run walkthrough";
+    window.setTimeout(() => {{
+      clearActive();
+      panel.classList.remove("active");
+    }}, 1800);
+  }}
+
+  button.addEventListener("click", () => {{
+    if (timer) window.clearInterval(timer);
+    button.disabled = true;
+    button.textContent = "Running...";
+    let index = 0;
+    showStep(index);
+    timer = window.setInterval(() => {{
+      index += 1;
+      if (index >= steps.length) {{
+        finish();
+        return;
+      }}
+      showStep(index);
+    }}, intervalMs);
+  }});
+}})();
+</script>
+"""
+
+
 def render_html(
     platform: Any | None,
     *,
@@ -420,38 +523,43 @@ def render_html(
 <title>Aegis — Credential Defense Console</title>
 <style>{_CSS}</style></head>
 <body>
-<header><h1>Aegis</h1><div>{mode_badge}</div></header>
+<header><h1>Aegis</h1><div class="header-actions"><button id="walkthrough-run" class="walkthrough-btn" type="button">Run walkthrough</button>{mode_badge}</div></header>
 <div class="sub">Operator console — what happened, what changed, what evidence is degraded, what to export.</div>
+<div id="walkthrough-status" class="walkthrough-status" aria-live="polite">
+  <div class="walkthrough-title">Walkthrough</div>
+  <div class="walkthrough-copy">Ready.</div>
+</div>
 
-<div class="label">Evidence health</div>
+<div class="label" data-section="evidence-health">Evidence health</div>
 {_health_panel(health)}
 
-<div class="label">Investigate (drilldowns → platform API)</div>
+<div class="label" data-section="investigate">Investigate (drilldowns → platform API)</div>
 {_drilldowns(data)}
 
-<div class="label">Platform cockpit</div>
+<div class="label" data-section="platform-cockpit">Platform cockpit</div>
 {_platform(data)}
 
-<div class="label">Nimbus rankings</div>
+<div class="label" data-section="nimbus-rankings">Nimbus rankings</div>
 {_nimbus_rankings(data)}
 
-<div class="label">Recent decisions</div>
+<div class="label" data-section="recent-decisions">Recent decisions</div>
 {_decisions(decisions, health)}
 
-<div class="label">Eval summary ({_esc(headline)})</div>
+<div class="label" data-section="eval-summary">Eval summary ({_esc(headline)})</div>
 {kpis}
 
-<div class="label">Success criteria</div>
+<div class="label" data-section="success-criteria">Success criteria</div>
 {criteria}
 
-<div class="label">Baseline vs protected</div>
+<div class="label" data-section="baseline-vs-protected">Baseline vs protected</div>
 {_baseline_table(cases)}
 
-<div class="label">Detector hit distribution</div>
+<div class="label" data-section="detector-hit-distribution">Detector hit distribution</div>
 <div class="card">{distribution}</div>
 
 <div class="hr"></div>
 <div class="empty">Generated by <span class="mono">aegis-dashboard</span> — export an audit bundle at <span class="mono">/api/platform/export?format=md</span>.</div>
+{_walkthrough_script()}
 </body></html>
 """
 

@@ -20,7 +20,7 @@ def _run(name: str, args: list[str]) -> int:
 def main() -> int:
     rc = 0
     rc |= _run("ruff", ["check", "."])
-    rc |= _run("pytest", ["-q", "-m", "not live"])
+    rc |= _run("pytest", ["-q", "-m", "not live and not visual"])
     if rc:
         print("\nverify: FAIL")
         sys.exit(1)

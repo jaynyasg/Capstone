@@ -117,6 +117,8 @@ def _with(**overrides) -> dict:
 def test_renders_core_sections() -> None:
     h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
     assert "#0d0d0d" in h  # Ship/Linear palette
+    assert "font-weight:800" in h  # section labels stay visually prominent
+    assert "border-left:3px solid var(--accent)" in h
     assert "Aegis" in h
     assert "100%" in h  # attack detection KPI
     assert "LEAKS" in h  # baseline column
@@ -135,14 +137,36 @@ def test_renders_platform_cockpit_from_contract() -> None:
 
 def test_renders_nimbus_rankings_sorted_by_score() -> None:
     h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
-    section = h.split("Nimbus rankings</div>", 1)[1].split(
-        '<div class="label">Recent decisions</div>', 1
+    section = h.split('data-section="nimbus-rankings">Nimbus rankings</div>', 1)[1].split(
+        'data-section="recent-decisions">Recent decisions</div>', 1
     )[0]
 
     assert "Nimbus rankings" in h
     assert "#1" in section
     assert "1.40" in section
     assert section.index("risky") < section.index("s1") < section.index("calm")
+
+
+def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
+    h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
+
+    assert 'id="walkthrough-run"' in h
+    assert "Run walkthrough" in h
+    assert 'id="walkthrough-status"' in h
+    assert "walkthrough-active" in h
+    for section_key in [
+        "evidence-health",
+        "investigate",
+        "platform-cockpit",
+        "nimbus-rankings",
+        "recent-decisions",
+        "eval-summary",
+        "success-criteria",
+        "baseline-vs-protected",
+        "detector-hit-distribution",
+    ]:
+        assert f'data-section="{section_key}"' in h
+        assert f'"key": "{section_key}"' in h
 
 
 def test_health_warnings_render_with_source() -> None:

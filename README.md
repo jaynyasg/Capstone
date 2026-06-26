@@ -413,6 +413,22 @@ uv run ruff check .   # lint
 The deterministic detectors and policy are unit-testable without any live provider. Live
 LLM, Braintrust, and the trained ML probe are exercised on demand, never on the gate.
 
+### Dashboard visual smoke
+
+The deployed dashboard includes a **Run walkthrough** button that scrolls through and
+highlights each operator section in the browser. For CI-style evidence, there is also an
+opt-in Playwright smoke test that opens a rendered dashboard and captures one screenshot
+per operator section.
+
+```bash
+uv run --extra visual playwright install chromium
+AEGIS_VISUAL_ARTIFACTS_DIR=dashboard/visual-smoke \
+  uv run --extra visual pytest -m visual tests/test_dashboard_visual.py
+```
+
+The normal `aegis-verify` gate excludes `visual` tests so local/browser setup never blocks
+the deterministic offline checks.
+
 ## Limitations
 
 - Demo-grade defense, **not** production-grade prevention of all credential exfiltration.
