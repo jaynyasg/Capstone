@@ -170,9 +170,11 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(active_packet).to_be_visible()
             sync_api.expect(active_packet).to_contain_text("Evidence packet arrived")
             sync_api.expect(active_packet).to_contain_text("Prompt/input")
+            sync_api.expect(active_packet).to_contain_text("Guard call")
             sync_api.expect(active_packet).to_contain_text("Data query")
             sync_api.expect(active_packet).to_contain_text("Try this prompt")
             sync_api.expect(active_packet).to_contain_text("weekly status report")
+            sync_api.expect(active_packet).to_contain_text("Live guard test")
             sync_api.expect(active_packet).to_contain_text("healthy")
             sample_link = active_packet.locator(".walkthrough-sample-link")
             sync_api.expect(sample_link).to_have_attribute(
@@ -183,15 +185,9 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(page.locator("#walkthrough-status.active")).to_be_visible()
             sync_api.expect(page.locator("#walkthrough-run")).to_contain_text("Running")
             sync_api.expect(page.locator(".walkthrough-step.active")).to_be_visible()
-            sync_api.expect(page.locator("#walkthrough-status .walkthrough-data")).to_contain_text(
-                "sessions"
-            )
-            sync_api.expect(
-                page.locator('section[data-section="investigate"] .walkthrough-section-packet')
-            ).to_contain_text("Operator query links")
-            sync_api.expect(
-                page.locator('section[data-section="investigate"] .walkthrough-section-packet')
-            ).to_contain_text("api_key=ghp_")
+            current_packet = page.locator("section.walkthrough-active .walkthrough-section-packet")
+            sync_api.expect(current_packet).to_contain_text("Prompt/input")
+            sync_api.expect(current_packet).to_contain_text("Live guard test")
             active_path = artifact_dir / "walkthrough-first-step.png"
             page.screenshot(path=active_path, full_page=False)
             assert active_path.stat().st_size > 1_000

