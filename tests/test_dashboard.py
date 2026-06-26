@@ -240,6 +240,49 @@ def test_recent_decisions_ordered_by_timestamp(tmp_path) -> None:
     assert [r["session_id"] for r in rows] == ["aaa", "zzz"]  # newest first, not file order
 
 
+def test_renders_with_non_numeric_kpi_value_does_not_crash() -> None:
+    # A hand-edited metrics.json with a non-numeric rate must not 500 the console.
+    bad = _with(
+        evals={
+            "balanced": {
+                **SAMPLE_PLATFORM["evals"]["balanced"],
+                "attack_detection_rate": "n/a",
+            }
+        }
+    )
+    h = render_html(bad)
+    assert "Aegis" in h
+    assert "0%" in h  # malformed rate degrades to 0%, not a crash
+
+
+def test_renders_with_success_criteria_as_list_does_not_crash() -> None:
+    bad = _with(
+        evals={
+            "balanced": {
+                **SAMPLE_PLATFORM["evals"]["balanced"],
+                "success_criteria": ["honeytoken_blocked"],
+            }
+        }
+    )
+    h = render_html(bad)
+    assert "Aegis" in h
+    assert "No success criteria." in h  # non-dict criteria -> empty note, not a crash
+
+
+def test_renders_with_non_numeric_distribution_count_does_not_crash() -> None:
+    bad = _with(
+        evals={
+            "balanced": {
+                **SAMPLE_PLATFORM["evals"]["balanced"],
+                "detector_hit_distribution": {"scanner": "lots"},
+            }
+        }
+    )
+    h = render_html(bad)
+    assert "Aegis" in h
+    assert "scanner" in h  # renders the row with a degraded (0) count, not a crash
+
+
 def test_generate_writes_static_snapshot(tmp_path) -> None:
     out = generate(
         traces_dir=tmp_path / "traces",

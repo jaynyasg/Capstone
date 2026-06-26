@@ -103,6 +103,20 @@ def _esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _num(value: Any, default: float = 0.0) -> float:
+    """Coerce a metric value to float for formatting; malformed input -> default, never crash.
+
+    ``metrics.json`` is operator-editable, so a non-numeric rate or count must degrade rather
+    than 500 the console. ``bool`` is excluded (it is an ``int`` subclass but not a metric).
+    """
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -130,11 +144,11 @@ def _action_pill(action: str) -> str:
 
 def _kpis(m: dict[str, Any]) -> str:
     cells = [
-        ("attack detection", f"{m.get('attack_detection_rate', 0):.0%}"),
-        ("benign allowed", f"{m.get('benign_allow_rate', 0):.0%}"),
+        ("attack detection", f"{_num(m.get('attack_detection_rate')):.0%}"),
+        ("benign allowed", f"{_num(m.get('benign_allow_rate')):.0%}"),
         ("false blocks", str(m.get("benign_false_blocks", 0))),
-        ("evidence complete", f"{m.get('evidence_completeness', 0):.0%}"),
-        ("avg latency", f"{m.get('avg_latency_ms', 0):.2f} ms"),
+        ("evidence complete", f"{_num(m.get('evidence_completeness')):.0%}"),
+        ("avg latency", f"{_num(m.get('avg_latency_ms')):.2f} ms"),
     ]
     items = "".join(
         f'<div class="card kpi"><div class="v">{_esc(v)}</div><div class="k">{_esc(k)}</div></div>'
@@ -144,10 +158,14 @@ def _kpis(m: dict[str, Any]) -> str:
 
 
 def _criteria(m: dict[str, Any]) -> str:
+    criteria = m.get("success_criteria", {})
     rows = []
-    for name, ok in m.get("success_criteria", {}).items():
-        mark = '<span class="ok">PASS</span>' if ok else '<span class="bad">FAIL</span>'
-        rows.append(f"<div>{mark} &nbsp; {_esc(name)}</div>")
+    # Only a {name: bool} mapping carries pass/fail; any other shape (e.g. a list) is malformed
+    # and must not crash the render — fall through to the empty note.
+    if isinstance(criteria, dict):
+        for name, ok in criteria.items():
+            mark = '<span class="ok">PASS</span>' if ok else '<span class="bad">FAIL</span>'
+            rows.append(f"<div>{mark} &nbsp; {_esc(name)}</div>")
     return f'<div class="card crit">{"".join(rows)}</div>' if rows else _note("No success criteria.")
 
 
@@ -170,15 +188,19 @@ def _baseline_table(cases: list[dict[str, Any]]) -> str:
 
 def _distribution(m: dict[str, Any]) -> str:
     dist = m.get("detector_hit_distribution", {})
-    if not dist:
+    if not isinstance(dist, dict) or not dist:
         return '<div class="empty">No detector hits recorded.</div>'
-    top = max(dist.values())
+    # Coerce counts for the bar math; a malformed count degrades to 0 rather than 500. ``:g``
+    # keeps whole numbers integer-formatted (4.0 -> "4"), so valid input renders unchanged.
+    counts = {str(name): _num(count) for name, count in dist.items()}
+    top = max(counts.values())
     rows = []
-    for name, count in sorted(dist.items(), key=lambda kv: -kv[1]):
+    for name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
         pct = int(100 * count / top) if top else 0
         rows.append(
             f'<div class="barrow"><span class="det">{_esc(name)}</span>'
-            f'<span class="bar" style="width:{pct}%"></span><span class="det">{count}</span></div>'
+            f'<span class="bar" style="width:{pct}%"></span>'
+            f'<span class="det">{_esc(f"{count:g}")}</span></div>'
         )
     return "".join(rows)
 
