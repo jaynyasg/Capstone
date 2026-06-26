@@ -11,16 +11,21 @@ Mode: Production Platform / Full Expansion
 > separating MVP from production claims. The accepted risk stands: identity remains demo-grade
 > Basic Auth. See `README.md` (Production platform layer) and `architecture.md`
 > (Platform Evidence Layer). Enterprise SSO/RBAC/tenancy/billing remain future work.
+>
+> **Current status (2026-06-26):** this file is now a historical design/review record, not
+> the canonical architecture. The current project explanation lives in `README.md` and
+> `architecture.md`. Observe + Learn online ML was added after this vNext pass and is
+> documented there plus in `AEGIS_TECHNICAL_PLAN.md`.
 
-## Verdict
+## Historical Verdict
 
 Aegis is a strong capstone MVP and a credible seed for a production security
 platform. It should not claim production-platform readiness until the platform
 layer around evidence durability, operator workflow, and claim discipline is
 made explicit.
 
-The SDK guard path is the right source of truth. The vNext work should harden
-the platform surfaces around that path rather than rebuild detection logic.
+The SDK guard path is the right source of truth. The vNext work hardened the
+platform surfaces around that path rather than rebuilding detection logic.
 
 ## Accepted Scope
 
@@ -70,15 +75,15 @@ Incidents, exports, stale-state, eval links
 - Existing tests cover redaction, corrupt artifacts, canary-safe metadata, CIFT storage,
   the overview endpoint, and dashboard rendering.
 
-## Production Gaps
+## Original Gaps and Current Resolution
 
 ### 1. Evidence Store
 
-Current overview reads local artifacts synchronously and can scale with all historical
-trace rows. Production vNext needs bounded API inputs, consistent counts, a stable
-evidence contract, and either a queryable store or cached snapshots.
+**Resolved in the shipped vNext slice.** The platform now uses a bounded SQLite evidence
+store, import health, query metadata, truthful total-vs-latest windows, and cached
+overview snapshots.
 
-Minimum production shape:
+Implemented production shape:
 
 - Bounded `limit` parameters with documented defaults and maximums.
 - Separate `total_count` from `latest` records.
@@ -87,11 +92,11 @@ Minimum production shape:
 
 ### 2. Durable Canaries
 
-Current canary detection depends on an in-memory registry. Plant events are traced, but
-the raw token needed for matching is not restored after process restart. Production vNext
-needs a durable canary registry or a clearly documented ephemeral-canary boundary.
+**Resolved in the shipped vNext slice.** Canary records can be persisted in an encrypted
+vault, restored after restart with the configured key, and surfaced as degraded when the
+key or vault cannot be used.
 
-Minimum production shape:
+Implemented production shape:
 
 - Safe-at-rest canary registry with raw-token protection.
 - Startup load path into the detector registry.
@@ -100,10 +105,11 @@ Minimum production shape:
 
 ### 3. Operator Console
 
-The dashboard currently answers "what exists?" Production operators need "what happened,
-what changed, who/what is affected, and what do I do next?"
+**Resolved in the shipped vNext slice.** The dashboard is now an operator cockpit over the
+platform contract, with evidence health, freshness, drilldowns, exports, Nimbus risk, and
+demo walkthrough/Test Console surfaces.
 
-Minimum production shape:
+Implemented production shape:
 
 - Drilldowns for sessions, decisions, detectors, canaries, and CIFT certs.
 - Evidence staleness and degraded-state warnings.
@@ -113,10 +119,10 @@ Minimum production shape:
 
 ### 4. Truthful Evidence Semantics
 
-CIFT totals can currently mean "latest visible rows" on the live gateway path and "all
-rows" on the static collector path. Production evidence APIs need stable semantics.
+**Resolved in the shipped vNext slice.** Platform responses separate all matching records
+from the bounded latest window, and drilldowns own filtered slices.
 
-Minimum production shape:
+Implemented production shape:
 
 - `total_count` means all matching records.
 - `latest` means the bounded visible window.
@@ -124,11 +130,11 @@ Minimum production shape:
 
 ### 5. Evidence Health
 
-Current loaders intentionally degrade to empty output for corrupt or unreadable files.
-That is acceptable for demo resilience, but production evidence cannot make missing
-data look like no events occurred.
+**Resolved in the shipped vNext slice.** Missing, unreadable, corrupt, partial, stale, and
+degraded sources are represented as structured health warnings and rendered near affected
+dashboard sections.
 
-Minimum production shape:
+Implemented production shape:
 
 - Structured warnings for skipped files, corrupt rows, stale reports, and store errors.
 - Dashboard surfaces health warnings near affected sections.
@@ -136,11 +142,11 @@ Minimum production shape:
 
 ### 6. Claim Discipline
 
-The existing PRD and technical plan correctly describe the current system as a capstone
-MVP, not a production security guarantee. Production vNext docs must preserve that
-distinction while naming the work required to cross the line.
+**Maintained in the shipped docs.** The README, PRD, technical plan, and architecture now
+separate the demo-grade capstone from the production-shaped platform layer and from future
+enterprise SaaS work.
 
-Minimum production shape:
+Implemented production shape:
 
 - README separates "demo-grade MVP" from "production-platform roadmap."
 - Architecture docs include `/api/platform/overview`, evidence store, canary registry,
@@ -156,9 +162,10 @@ Minimum production shape:
 
 ## Review Status
 
-CEO review status: ISSUES_OPEN.
-Accepted must-fixes: 6.
-Accepted risks: 1.
+Historical CEO review status at promotion: ISSUES_OPEN.
+Current implementation status: accepted must-fixes delivered and covered by the offline
+verify gate.
+Accepted risks remaining: 1 — Basic Auth / identity remains demo-grade.
 Unresolved review decisions: 0.
 
-Recommended next review: /plan-eng-review.
+Canonical current docs: `README.md` and `architecture.md`.

@@ -9,6 +9,13 @@ Date: 2026-06-18
 > (Production platform layer), `architecture.md` (Platform Evidence Layer), and
 > `docs/designs/aegis-production-platform-vnext.md`. Enterprise SSO/RBAC/tenancy/billing and a
 > production secret manager remain out of scope.
+>
+> **Observe + Learn update (2026-06-26):** the shipped gateway now includes an
+> observe-mode online learner (`observe_ml_learner`). First-time high-confidence leaks in
+> observe mode are allowed and used as numeric feature-vector training examples for a tiny
+> PyTorch MLP; repeated learned leak patterns can then be blocked during that process
+> lifetime. This is separate from the optional offline-trained `ml_risk_probe`, which remains
+> WARN-capped and non-authoritative.
 
 Deliverable: A reasonable-scope technical plan for Aegis as an SDK, a lightweight platform, and an optional end-user environment plugin by June 29, 2026. The plan combines the Aegis papers, the Headroom proxy/SDK architecture, and the AgentForge eval/observability architecture while using Braintrust instead of Langfuse.
 
@@ -148,6 +155,16 @@ Aegis owns the security boundary between the user/client side and the model/tool
    - The model output becomes one detector signal in the policy engine, not the only blocking mechanism.
    - If the model artifact is missing or fails to load, Aegis falls back to deterministic detectors and logs the degraded mode.
 
+   Shipped online learning path:
+
+   - Observe + Learn: in observe mode, high-confidence leak evidence trains a tiny runtime
+     PyTorch MLP on numeric feature vectors plus benign anchors. First-time leaks remain
+     observable; repeated learned patterns can block through `observe_ml_learner`.
+   - The online learner stores in-process features/model weights, not raw prompt or secret
+     text, and reports `ml_unavailable` if PyTorch is absent.
+   - This learner is not a replacement for deterministic detectors or reviewed policy
+     rules; it is a demo-grade adaptive signal for repeated-pattern prevention.
+
    Stretch detector stage/interface:
 
 - CIFT calibration and certification layer: every hosted model endpoint gets its own
@@ -169,7 +186,8 @@ Aegis owns the security boundary between the user/client side and the model/tool
 
    - `strict`: block most suspicious activity.
    - `balanced`: block high-confidence leaks, warn on ambiguous cases.
-   - `observe`: never block, only trace and score.
+   - `observe`: Observe + Learn. Trace and score first-time evidence, train the online
+     learner when ML is available, and block repeated learned leak patterns.
 
 5. Braintrust observability and evals
 

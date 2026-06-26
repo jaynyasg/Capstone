@@ -6,6 +6,14 @@
 
 **Gauntlet AI Capstone**
 
+> **Implementation update (2026-06-26):** the shipped capstone keeps the SDK-first guard
+> architecture described here and adds the production-shaped platform evidence layer
+> documented in `architecture.md` and `README.md`. Observe mode is now presented in the UI as
+> **Observe + Learn**: first-time leaks are observed and can train a tiny runtime PyTorch MLP
+> from numeric feature vectors; repeated learned leak patterns can be blocked by
+> `observe_ml_learner`. The optional offline `ml_risk_probe` remains WARN-capped and
+> non-authoritative.
+
 
 ## Abstract
 
@@ -217,7 +225,9 @@ weight introspection is documented as a stronger ex-
 tension or stretch goal.
 FR-14 Optional ML risk probe P2 A bounded PyTorch detector may score normalized
 events, but deterministic detectors remain authoritative
-for high-confidence blocking.
+for high-confidence blocking. Shipped implementation
+also includes Observe + Learn online training for
+repeated observed leak patterns.
 FR-15 Model-specific CIFT calibration P2 The gateway can record a calibration certificate
 for a user-hosted model endpoint. Gateway-only models receive a gateway calibration
 status; CIFT certification requires model-specific activation evidence that passes
@@ -549,8 +559,9 @@ The MVP should avoid nested logical combinations. Rules can be evaluated indepen
 
 ```text
 Mode Behavior
-observe Never blocks; records detector evidence, risk scores, and recommended actions
-for baseline comparison and tuning.
+observe Observe + Learn: records detector evidence, risk scores, and recommended
+actions for baseline comparison and tuning; first-time trainable leaks can train
+an online MLP, and repeated learned leak patterns can block.
 balanced Blocks or sanitizes high-confidence leaks, honeytoken exposure, tool-call exfil-
 tration, and budget exhaustion; warns on ambiguous cases.
 strict Blocks most suspicious credential, encoding, and provenance anomalies; useful
@@ -730,7 +741,7 @@ work for P4.
 
 ## 12 Limitations
 
-Aegis should be presented with disciplined claims. The capstone system is not production-ready. Cloud/API model support cannot provide true CIFT-style activation monitoring. The leakage ledger is a cumulative signal, not a formal security proof. The tool-call scanner is scoped to supported schemas. Braintrust integration is an evidence mechanism, not a defense mechanism. The optional ML risk probe is not required for blocking and should not be overclaimed. A determined adaptive attacker may find paths around MVP rules. A production deployment would need stronger secret-manager integration, persistence, access control, broader schema coverage, and independent red-team validation.
+Aegis should be presented with disciplined claims. The capstone system is not production-ready. Cloud/API model support cannot provide true CIFT-style activation monitoring. The leakage ledger is a cumulative signal, not a formal security proof. The tool-call scanner is scoped to supported schemas. Braintrust integration is an evidence mechanism, not a defense mechanism. Observe + Learn is real online PyTorch training, but it is in-process, demo-grade, and not a formal adaptive-defense guarantee. The optional offline ML risk probe is not required for blocking and should not be overclaimed. A determined adaptive attacker may find paths around MVP rules. A production deployment would need stronger secret-manager integration, persistence, access control, broader schema coverage, durable ML governance, and independent red-team validation.
 
 ## 13 Conclusion
 

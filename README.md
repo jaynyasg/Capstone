@@ -8,11 +8,13 @@ injection, encoded payloads, low-rate multi-turn drip, or tool-call arguments.
 
 > **Claim discipline.** This is a demo-grade capstone, not a production guarantee. The
 > leakage ledger is a cumulative *signal*, not a formal proof; the tool-call scanner covers a
-> scoped set of schemas; the ML probe is an auxiliary signal, never an authority. See
-> [Limitations](#limitations).
+> scoped set of schemas; the offline ML probe is an auxiliary signal; Observe + Learn can
+> block repeated learned patterns but is not a production guarantee. See [Limitations](#limitations).
 
-Gauntlet AI capstone. Full spec in [`PRD.md`](PRD.md) and
-[`AEGIS_TECHNICAL_PLAN.md`](AEGIS_TECHNICAL_PLAN.md); build contract in [`CLAUDE.md`](CLAUDE.md).
+Gauntlet AI capstone. Full spec in [`PRD.md`](PRD.md), current system architecture in
+[`architecture.md`](architecture.md), technical plan in
+[`AEGIS_TECHNICAL_PLAN.md`](AEGIS_TECHNICAL_PLAN.md), and build contract in
+[`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -36,6 +38,7 @@ redacted trace:
               Inspect ────────┼──────── deterministic detectors + credential broker
                               │
               Score ──────────┼──────── Nimbus-lite cumulative leakage ledger
+                              │         (+ Observe + Learn online MLP in observe mode)
                               │         (+ optional ML risk probe, non-authoritative)
                               │
               Enforce ────────┼──────── policy engine → ALLOW · WARN · SANITIZE · BLOCK · ESCALATE
@@ -54,6 +57,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11.
 
 ```bash
 uv sync --extra dev          # install
+uv sync --extra dev --extra ml  # optional: enable local PyTorch ML paths
 uv run aegis-verify          # gate: ruff + pytest (offline, deterministic)
 uv run python -m examples.demo_agent   # baseline-vs-protected demo (live gpt-4o-mini or mock)
 uv run aegis-eval            # run the eval suite → evals/reports/
@@ -231,6 +235,7 @@ hosted database or external secret manager. Back up that directory to back up th
 | `tool_call_argument_scanner` | suspicious `send_email` / `http_request` / `query_database` args before dispatch |
 | `partial_leak_detector` | credential *fragments* — fuels drip detection without blocking alone |
 | `nimbus_lite_ledger` | per-session cumulative leakage; trips warn/block thresholds across turns |
+| `observe_ml_learner` | Observe + Learn online PyTorch learner; trains on observe-mode leak features and can block repeated learned patterns |
 | `ml_risk_probe` *(optional)* | auxiliary PyTorch signal; WARN-capped, never authoritative |
 
 The **credential broker** resolves `secret://…` handles only inside trusted tool execution,
@@ -405,7 +410,7 @@ src/aegis/
   config.py           # settings: policy mode, thresholds, .env / .env.local loading
   policy/             # policy engine + modes
   detectors/          # patterns, encodings, honeytokens, tool_args, partial, nimbus
-    ml/               # optional risk probe (features, model, training)
+    ml/               # shared features, Observe + Learn online learner, optional risk probe
   secrets/            # credential broker + local fake store
   providers/          # provider abstraction: mock + openai (gpt-4o-mini)
   platform/           # vNext evidence layer: contract, SQLite store, importers,
@@ -427,8 +432,9 @@ uv run pytest         # full test suite
 uv run ruff check .   # lint
 ```
 
-The deterministic detectors and policy are unit-testable without any live provider. Live
-LLM, Braintrust, and the trained ML probe are exercised on demand, never on the gate.
+The deterministic detectors and policy are unit-testable without any live provider. The
+offline gate runs without live LLM or Braintrust. PyTorch-specific Observe + Learn and probe
+tests auto-skip if the `ml` extra is not installed.
 
 ### Dashboard visual smoke
 
@@ -460,6 +466,9 @@ the deterministic offline checks.
 - Demo-grade defense, **not** production-grade prevention of all credential exfiltration.
 - The tool-call scanner is scoped to `send_email`, `http_request`, `query_database`.
 - The Nimbus-lite ledger is a cumulative leakage *signal*, not a formal information-flow bound.
+- Observe + Learn performs real online PyTorch training, but only from in-process runtime
+  feature vectors and only for repeated learned-pattern prevention; it is not durable across
+  restart and not a formal adaptive-defense guarantee.
 - Cloud/API model support cannot provide white-box (CIFT-style) activation monitoring.
 - Platform state is **local**: SQLite evidence store + an encrypted local canary vault under
   `.aegis/`. The vault's `cryptography`/Fernet encryption protects *canary tokens at rest* — it
