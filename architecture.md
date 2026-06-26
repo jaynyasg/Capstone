@@ -386,7 +386,9 @@ for the full nine-step walkthrough, uses the same prompt across every section, a
 a different sample on the next click. The walkthrough sends the selected policy mode to live
 guard endpoints and updates the per-run live detector chart from real guard responses. When
 the run finishes, the dashboard renders a bottom **Walkthrough run summary** with each step's
-purpose, platform source/query, prompt, action, risk, detectors, and highlighted values.
+purpose, platform source/query, prompt, action, risk, detectors, and highlighted values. The
+completed summary is restored after dashboard refreshes and remains visible until the next
+walkthrough run begins.
 
 ## Provider Architecture
 

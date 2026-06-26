@@ -844,6 +844,7 @@ def _walkthrough_script(
   const autoRefreshMs = {refresh_ms};
   const initialPolicyMode = {initial_policy_mode};
   const sampleStorageKey = "aegis.walkthrough.sampleIndex";
+  const summaryStorageKey = "aegis.walkthrough.lastSummary";
   const button = document.getElementById("walkthrough-run");
   const panel = document.getElementById("walkthrough-status");
   const policyModeBadge = document.getElementById("selected-policy-mode");
@@ -1151,6 +1152,14 @@ def _walkthrough_script(
     runSummary.appendChild(empty);
   }}
 
+  function clearLastRunSummary() {{
+    try {{
+      window.localStorage.removeItem(summaryStorageKey);
+    }} catch (err) {{
+      // Storage can be disabled; the in-page summary still works for the current run.
+    }}
+  }}
+
   function recordStepStatus(step, status, detail = "") {{
     stepResults.set(step.key, {{
       status,
@@ -1199,6 +1208,63 @@ def _walkthrough_script(
     return rows.length ? rows.map(([name, count]) => `${{name}}:${{count}}`).join(", ") : "none";
   }}
 
+  function defaultStepResult(step) {{
+    return {{
+      status: "pending",
+      detail: "This step did not return a live guard result before the summary rendered.",
+      action: "pending",
+      risk: "pending",
+      detectors: "pending",
+      recordedAt: "pending",
+      policyMode: policyModeLabel(selectedPolicyMode),
+      guardCall: guardPathForSample(activeSample || {{}}),
+    }};
+  }}
+
+  function currentRunSummary() {{
+    return {{
+      version: 1,
+      completedAt: new Date().toLocaleTimeString(),
+      startedAt: runStartedAt || "unknown",
+      policyMode: policyModeLabel(selectedPolicyMode),
+      scenario: activeSample.label || "sample",
+      guardCall: guardPathForSample(activeSample || {{}}),
+      liveResponses: liveDetectorResponses,
+      detectorHits: detectorSummaryText(),
+      samplePrompt: activeSample.prompt || "",
+      steps: steps.map((step, index) => ({{
+        index,
+        key: step.key,
+        title: step.title,
+        purpose: step.copy,
+        source: step.source || "platform.overview",
+        data: step.data || "platform.overview",
+        fields: Array.isArray(step.fields) ? step.fields : [],
+        result: stepResults.get(step.key) || defaultStepResult(step),
+        prompt: activeSample.prompt || "",
+      }})),
+    }};
+  }}
+
+  function saveLastRunSummary(summary) {{
+    try {{
+      window.localStorage.setItem(summaryStorageKey, JSON.stringify(summary));
+    }} catch (err) {{
+      // The on-page summary remains visible even if persistence is blocked.
+    }}
+  }}
+
+  function loadLastRunSummary() {{
+    try {{
+      const raw = window.localStorage.getItem(summaryStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && parsed.version === 1 && Array.isArray(parsed.steps) ? parsed : null;
+    }} catch (err) {{
+      return null;
+    }}
+  }}
+
   function appendSummaryField(container, labelText, valueText) {{
     const field = document.createElement("div");
     const label = document.createElement("span");
@@ -1210,31 +1276,23 @@ def _walkthrough_script(
     container.appendChild(field);
   }}
 
-  function renderRunSummary() {{
+  function renderRunSummary(summary = null) {{
     if (!runSummary) return;
+    const run = summary || currentRunSummary();
     runSummary.innerHTML = "";
     const overview = document.createElement("div");
     overview.className = "walkthrough-summary-head";
-    appendSummaryField(overview, "Run completed", new Date().toLocaleTimeString());
-    appendSummaryField(overview, "Started", runStartedAt || "unknown");
-    appendSummaryField(overview, "Policy mode", policyModeLabel(selectedPolicyMode));
-    appendSummaryField(overview, "Scenario", activeSample.label || "sample");
-    appendSummaryField(overview, "Guard call", guardPathForSample(activeSample || {{}}));
-    appendSummaryField(overview, "Live responses", String(liveDetectorResponses));
-    appendSummaryField(overview, "Detector hits", detectorSummaryText());
+    appendSummaryField(overview, "Run completed", run.completedAt || "unknown");
+    appendSummaryField(overview, "Started", run.startedAt || "unknown");
+    appendSummaryField(overview, "Policy mode", run.policyMode || "unknown");
+    appendSummaryField(overview, "Scenario", run.scenario || "sample");
+    appendSummaryField(overview, "Guard call", run.guardCall || "POST /guard/*");
+    appendSummaryField(overview, "Live responses", String(run.liveResponses || 0));
+    appendSummaryField(overview, "Detector hits", run.detectorHits || "none");
     runSummary.appendChild(overview);
 
-    steps.forEach((step, index) => {{
-      const result = stepResults.get(step.key) || {{
-        status: "pending",
-        detail: "This step did not return a live guard result before the summary rendered.",
-        action: "pending",
-        risk: "pending",
-        detectors: "pending",
-        recordedAt: "pending",
-        policyMode: policyModeLabel(selectedPolicyMode),
-        guardCall: guardPathForSample(activeSample || {{}}),
-      }};
+    run.steps.forEach((step, index) => {{
+      const result = step.result || defaultStepResult(step);
       const section = document.createElement("section");
       const heading = document.createElement("h3");
       const values = document.createElement("div");
@@ -1244,11 +1302,11 @@ def _walkthrough_script(
       values.className = "walkthrough-data";
       renderDataRows(values, [
         {{ label: "section", value: step.key }},
-        {{ label: "purpose", value: step.copy }},
+        {{ label: "purpose", value: step.purpose || step.copy }},
         {{ label: "source", value: step.source || "platform.overview" }},
         {{ label: "data query", value: step.data || "platform.overview" }},
-        {{ label: "policy mode", value: result.policyMode || policyModeLabel(selectedPolicyMode) }},
-        {{ label: "guard call", value: result.guardCall || guardPathForSample(activeSample || {{}}) }},
+        {{ label: "policy mode", value: result.policyMode || run.policyMode || "unknown" }},
+        {{ label: "guard call", value: result.guardCall || run.guardCall || "POST /guard/*" }},
         {{ label: "status", value: result.status }},
         {{ label: "action", value: result.action || "pending" }},
         {{ label: "risk", value: result.risk || "pending" }},
@@ -1261,7 +1319,7 @@ def _walkthrough_script(
         }}))),
       ]);
       prompt.className = "walkthrough-summary-prompt";
-      prompt.textContent = `Prompt used for this step:\\n${{activeSample.prompt || "none"}}`;
+      prompt.textContent = `Prompt used for this step:\\n${{step.prompt || run.samplePrompt || "none"}}`;
       section.append(heading, values, prompt);
       runSummary.appendChild(section);
     }});
@@ -1410,7 +1468,9 @@ def _walkthrough_script(
     renderStepList(steps.length);
     if (packetTarget) packetTarget.textContent = "complete";
     summaryReady = true;
-    renderRunSummary();
+    const summary = currentRunSummary();
+    saveLastRunSummary(summary);
+    renderRunSummary(summary);
     if (runSummary) {{
       runSummary.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "start" }});
     }}
@@ -1426,6 +1486,7 @@ def _walkthrough_script(
     resetLiveDetectorChart();
     currentRunId += 1;
     runStartedAt = new Date().toLocaleTimeString();
+    clearLastRunSummary();
     resetRunSummary();
     activeSample = nextSampleForRun();
     button.disabled = true;
@@ -1444,6 +1505,8 @@ def _walkthrough_script(
   renderStepList();
   renderPacket();
   renderLiveDetectorChart();
+  const restoredSummary = loadLastRunSummary();
+  if (restoredSummary) renderRunSummary(restoredSummary);
   scheduleRefresh();
 }})();
 </script>

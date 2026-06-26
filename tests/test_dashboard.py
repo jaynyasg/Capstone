@@ -170,6 +170,7 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "policy_mode: selectedPolicyMode" in h
     assert "const walkthroughSamples =" in h
     assert 'const sampleStorageKey = "aegis.walkthrough.sampleIndex";' in h
+    assert 'const summaryStorageKey = "aegis.walkthrough.lastSummary";' in h
     assert "function nextSampleForRun()" in h
     assert "activeSample = nextSampleForRun();" in h
     assert 'id="walkthrough-status"' in h
@@ -202,10 +203,17 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert 'id="walkthrough-run-summary"' in h
     assert "Walkthrough run summary" in h
     assert "Run walkthrough to generate a step-by-step summary." in h
-    assert "function renderRunSummary()" in h
+    assert "function renderRunSummary(summary = null)" in h
+    assert "function saveLastRunSummary(summary)" in h
+    assert "function loadLastRunSummary()" in h
+    assert "function clearLastRunSummary()" in h
     assert "Step ${index + 1}: ${step.title}" in h
     assert "Prompt used for this step" in h
     assert "Detector hits" in h
+    assert "saveLastRunSummary(summary);" in h
+    assert "const restoredSummary = loadLastRunSummary();" in h
+    assert "if (restoredSummary) renderRunSummary(restoredSummary);" in h
+    assert "clearLastRunSummary();" in h
     assert "summaryReady = true;" in h
     assert "runSummary.scrollIntoView" in h
     assert "No user prompt" not in h

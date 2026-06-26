@@ -451,6 +451,8 @@ Detector evidence is split into a saved **Eval detector hit distribution** and a
 **Live walkthrough detector hits** chart that increments from those live guard responses. At
 the end of the run, the bottom **Walkthrough run summary** lists each section in order with
 its purpose, data source/query, prompt, action, risk, detectors, and highlighted values.
+That last summary is restored after dashboard refreshes and remains visible until the next
+walkthrough run starts.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 
