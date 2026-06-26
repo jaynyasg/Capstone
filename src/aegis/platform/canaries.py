@@ -185,6 +185,8 @@ class CanaryVault:
         if not self._available or self._fernet is None:
             return []
         restored: list[dict[str, Any]] = []
+        failures: list[str] = []
+        eligible = 0  # rows that carry a token cipher (i.e. were stored with a key)
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT token_cipher, {', '.join(_SAFE_COLUMNS)} FROM canaries"
@@ -193,22 +195,16 @@ class CanaryVault:
             cipher = row["token_cipher"]
             if cipher is None:
                 continue
+            eligible += 1
             try:
                 token = self._fernet.decrypt(cipher).decode("utf-8")
             except Exception:  # noqa: BLE001 - a bad row must not abort restore of good rows
-                self._row_warnings.append(
-                    HealthWarning(
-                        source_kind="canaries",
-                        warning_type=WarningType.CORRUPT_ROW,
-                        severity=HealthSeverity.WARNING,
-                        detail=f"canary {row['canary_id']} could not be decrypted",
-                        count=1,
-                    )
-                )
+                failures.append(str(row["canary_id"]))
                 continue
             record = _safe_row(row)
             record["token"] = token
             restored.append(record)
+        self._row_warnings = _decrypt_warnings(eligible, failures)
         return restored
 
     def health_warnings(self) -> list[HealthWarning]:
@@ -245,6 +241,59 @@ def _safe_row(row: sqlite3.Row) -> dict[str, Any]:
     data = {key: row[key] for key in _SAFE_COLUMNS}
     data["provider_valid"] = bool(data.get("provider_valid"))
     return data
+
+
+# Cap per-row decrypt warnings so a vault with many corrupt rows can't flood the health panel.
+_MAX_ROW_WARNINGS = 5
+
+
+def _decrypt_warnings(eligible: int, failures: list[str]) -> list[HealthWarning]:
+    """Classify token-decrypt failures into operator-actionable health.
+
+    If *every* decryptable row failed, the key is valid-format but wrong (Fernet authenticates
+    each token, so a mismatched key fails all of them) — a recoverable mismatch, not data loss.
+    Collapse to a single DEGRADED "do not delete" signal so an operator doesn't discard a vault
+    that only needs the right key. If only *some* rows failed, the rows that decrypted prove the
+    key is correct, so the failures are genuine corruption: surface them as CORRUPT_ROW, capped.
+    """
+    if not failures:
+        return []
+    if eligible and len(failures) == eligible:
+        return [
+            HealthWarning(
+                source_kind="canaries",
+                warning_type=WarningType.DEGRADED,
+                severity=HealthSeverity.ERROR,
+                detail=(
+                    f"canary vault key does not match the {len(failures)} stored token(s): "
+                    "restart detection degraded — set the correct AEGIS_CANARY_VAULT_KEY. The "
+                    "vault is recoverable; do not delete it."
+                ),
+                count=len(failures),
+            )
+        ]
+    warnings = [
+        HealthWarning(
+            source_kind="canaries",
+            warning_type=WarningType.CORRUPT_ROW,
+            severity=HealthSeverity.WARNING,
+            detail=f"canary {canary_id} could not be decrypted",
+            count=1,
+        )
+        for canary_id in failures[:_MAX_ROW_WARNINGS]
+    ]
+    remaining = len(failures) - _MAX_ROW_WARNINGS
+    if remaining > 0:
+        warnings.append(
+            HealthWarning(
+                source_kind="canaries",
+                warning_type=WarningType.CORRUPT_ROW,
+                severity=HealthSeverity.WARNING,
+                detail=f"{remaining} more canary row(s) could not be decrypted",
+                count=remaining,
+            )
+        )
+    return warnings
 
 
 def _make_fernet(key: str | None) -> Fernet | None:

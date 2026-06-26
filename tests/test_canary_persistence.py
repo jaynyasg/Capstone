@@ -14,7 +14,23 @@ from cryptography.fernet import Fernet
 
 from aegis import AegisClient, Settings
 from aegis.contracts import Action
+from aegis.platform.canaries import CanaryVault
 from aegis.platform.store import WarningType
+
+
+def _store(vault: CanaryVault, canary_id: str, token: str, service: str = "github") -> None:
+    vault.store(
+        canary_id=canary_id,
+        token=token,
+        service=service,
+        session_id="s1",
+        plant_location="env",
+        planted_at=1.0,
+        format_slug="github-ghp",
+        provider_valid=False,
+        safety_note="",
+        spec_hash="",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -132,6 +148,54 @@ def test_corrupt_vault_row_warns_and_valid_rows_restore(tmp_path) -> None:
 
     warnings = restarted.registry.health_warnings()
     assert any(w.warning_type is WarningType.CORRUPT_ROW for w in warnings)
+
+
+def test_wrong_key_collapses_to_one_recoverable_warning(tmp_path) -> None:
+    db = tmp_path / "vault.db"
+    vault = CanaryVault(db, Fernet.generate_key().decode())
+    for i in range(3):
+        _store(vault, f"c{i}", f"tok{i}")
+
+    # Reopen with a different VALID-format key: every token fails to decrypt. This is a
+    # recoverable key mismatch, not data corruption, so it must collapse to ONE "do not delete"
+    # signal rather than N per-row CORRUPT_ROW warnings that invite deleting a recoverable vault.
+    wrong = CanaryVault(db, Fernet.generate_key().decode())
+    assert wrong.restore() == []  # nothing decrypts under the wrong key
+
+    warnings = wrong.health_warnings()
+    corrupt_row = [w for w in warnings if w.warning_type is WarningType.CORRUPT_ROW]
+    degraded = [w for w in warnings if w.warning_type is WarningType.DEGRADED]
+    assert corrupt_row == []  # no per-row corruption noise
+    assert len(degraded) == 1
+    assert "recoverable" in degraded[0].detail.lower()
+    assert "do not delete" in degraded[0].detail.lower()
+
+
+def test_partial_corruption_keeps_capped_per_row_warnings(tmp_path) -> None:
+    db = tmp_path / "vault.db"
+    key = Fernet.generate_key().decode()
+    vault = CanaryVault(db, key)
+    _store(vault, "good", "tok")  # one decryptable row proves the key is correct
+
+    # Seven genuinely-corrupt rows alongside the good one: the key is right, so these are real
+    # per-row corruption, surfaced as CORRUPT_ROW but capped so the health panel stays readable.
+    conn = sqlite3.connect(db)
+    for i in range(7):
+        conn.execute(
+            "INSERT INTO canaries (canary_id, token_cipher, service, planted_at, format_slug, "
+            "provider_valid, lifecycle_state) VALUES (?,?,?,?,?,?,?)",
+            (f"bad{i}", b"not-a-valid-fernet-token", "github", 1.0, "github-ghp", 0, "planted"),
+        )
+    conn.commit()
+    conn.close()
+
+    reopened = CanaryVault(db, key)
+    assert [r["canary_id"] for r in reopened.restore()] == ["good"]  # the good row still restores
+    corrupt_row = [
+        w for w in reopened.health_warnings() if w.warning_type is WarningType.CORRUPT_ROW
+    ]
+    assert len(corrupt_row) <= 6  # 7 failures capped to <= 5 per-row + 1 summary
+    assert any("more" in w.detail.lower() for w in corrupt_row)  # summary names the remainder
 
 
 def test_detection_advances_lifecycle_to_detected(tmp_path) -> None:
