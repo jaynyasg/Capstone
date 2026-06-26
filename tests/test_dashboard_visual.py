@@ -158,11 +158,17 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(
                 page.locator('section[data-section="evidence-health"].walkthrough-active')
             ).to_be_visible()
+            sync_api.expect(page.locator(".walkthrough-packet")).to_be_visible()
+            sync_api.expect(page.locator(".walkthrough-source")).to_contain_text(
+                "snapshot + health"
+            )
+            sync_api.expect(page.locator(".walkthrough-data")).to_contain_text("healthy")
             assert page.locator("#dashboard-auto-refresh").get_attribute("data-state") == "paused"
             page.wait_for_timeout(2500)
             sync_api.expect(page.locator("#walkthrough-status.active")).to_be_visible()
             sync_api.expect(page.locator("#walkthrough-run")).to_contain_text("Running")
             sync_api.expect(page.locator(".walkthrough-step.active")).to_be_visible()
+            sync_api.expect(page.locator(".walkthrough-data")).to_contain_text("sessions")
             active_path = artifact_dir / "walkthrough-first-step.png"
             page.screenshot(path=active_path, full_page=False)
             assert active_path.stat().st_size > 1_000

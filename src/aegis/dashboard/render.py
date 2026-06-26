@@ -106,6 +106,27 @@ tr:last-child td{border-bottom:none}
   color:var(--muted);font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .walkthrough-step.active{border-color:var(--accent);background:#005ea222;color:var(--fg)}
 .walkthrough-step.done{border-color:#2ea04366;color:var(--allow)}
+.walkthrough-packet{margin-top:10px;border:1px solid #005ea266;border-radius:8px;background:#005ea214;
+  padding:10px}
+.walkthrough-packet-head{display:flex;justify-content:space-between;gap:10px;align-items:center;
+  font-size:11px;font-weight:800;text-transform:uppercase;color:var(--fg)}
+.walkthrough-source{font-size:11px;color:var(--sanitize);text-transform:none;text-align:right}
+.walkthrough-flow{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;margin-top:8px}
+.packet-dot{width:10px;height:10px;border-radius:999px;background:var(--sanitize);
+  box-shadow:0 0 16px #58a6ff99;animation:packetPulse 1.2s ease-in-out infinite}
+.packet-line{position:relative;height:2px;background:#58a6ff44;overflow:hidden}
+.packet-line:after{content:"";position:absolute;inset:0;width:42%;background:linear-gradient(90deg,transparent,var(--sanitize),transparent);
+  animation:packetTravel 1.4s linear infinite}
+.walkthrough-target{font-size:11px;color:var(--muted);font-weight:700;white-space:nowrap}
+.walkthrough-data{display:grid;gap:5px;margin-top:9px}
+.walkthrough-data-row{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px;align-items:baseline;
+  font-size:12px}
+.walkthrough-data-row span:first-child{color:var(--muted);font-weight:700;text-transform:uppercase}
+.walkthrough-data-row strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  color:var(--fg);overflow-wrap:anywhere}
+.walkthrough-data-empty{font-size:12px;color:var(--muted)}
+@keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
+@keyframes packetTravel{0%{transform:translateX(-110%)}100%{transform:translateX(240%)}}
 @media (prefers-reduced-motion: reduce){.dashboard-section.walkthrough-active{outline-offset:4px}}
 @media (max-width:640px){.walkthrough-steps{grid-template-columns:1fr}}
 """
@@ -433,13 +454,168 @@ def _nimbus_rankings(data: dict[str, Any]) -> str:
     )
 
 
-def _walkthrough_script(auto_refresh: int = 0) -> str:
-    steps = json.dumps(
-        [
-            {"key": key, "title": title, "copy": copy}
-            for key, title, copy in _WALKTHROUGH_STEPS
-        ]
+def _json_for_script(value: Any) -> str:
+    return (
+        json.dumps(value)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
     )
+
+
+def _packet_field(label: str, value: Any) -> dict[str, str]:
+    return {"label": label, "value": str(value)}
+
+
+def _top_mapping_item(values: Any) -> tuple[str, str]:
+    if not isinstance(values, dict) or not values:
+        return "none", "0"
+    name, count = max(values.items(), key=lambda kv: _num(kv[1]))
+    return str(name), f"{_num(count):g}"
+
+
+def _walkthrough_steps(
+    data: dict[str, Any],
+    cases: list[dict[str, Any]],
+    headline: str,
+    metrics: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    snapshot = data.get("snapshot", {})
+    health = data.get("health", {})
+    status = data.get("status", {})
+    decisions = data.get("decisions", {})
+    cift = data.get("cift", {})
+    canaries = data.get("canaries", {})
+    sessions = [dict(s) for s in data.get("sessions", []) if isinstance(s, dict)]
+    recent = [dict(r) for r in decisions.get("recent", []) if isinstance(r, dict)]
+    metrics = metrics if isinstance(metrics, dict) else {}
+
+    top_session = max(
+        sessions,
+        key=lambda s: (_num(s.get("nimbus_cumulative_score")), _num(s.get("last_seen"))),
+        default={},
+    )
+    latest_decision = recent[0] if recent else {}
+    action_name, action_count = _top_mapping_item(decisions.get("by_action"))
+    detector_name, detector_count = _top_mapping_item(decisions.get("detector_hits"))
+    eval_detector_name, eval_detector_count = _top_mapping_item(
+        metrics.get("detector_hit_distribution")
+    )
+    cift_latest = (cift.get("latest") or [{}])[0] if cift.get("latest") else {}
+    criteria = metrics.get("success_criteria") if isinstance(metrics, dict) else {}
+    criteria = criteria if isinstance(criteria, dict) else {}
+    passing_criteria = sum(1 for ok in criteria.values() if ok)
+    attacks = [
+        c for c in cases if c.get("baseline_leaked") is not None and c.get("worst_action")
+    ]
+    baseline_leaks = sum(1 for c in attacks if c.get("baseline_leaked"))
+    protected_blocks = sum(1 for c in attacks if c.get("worst_action") == "BLOCK")
+    freshness = str(snapshot.get("freshness", "live"))
+    cache_age = _num(snapshot.get("cache_age_seconds"))
+    freshness_value = freshness if freshness in ("live", "static") else f"{freshness} ({cache_age:.0f}s)"
+
+    payloads = {
+        "evidence-health": {
+            "source": "snapshot + health",
+            "fields": [
+                _packet_field("status", health.get("status", "healthy")),
+                _packet_field("freshness", freshness_value),
+                _packet_field("warnings", len(health.get("warnings", []) or [])),
+            ],
+        },
+        "investigate": {
+            "source": "api drilldowns",
+            "fields": [
+                _packet_field("sessions", len(sessions)),
+                _packet_field("top action", f"{action_name} ({action_count})"),
+                _packet_field("detector", f"{detector_name} ({detector_count})"),
+            ],
+        },
+        "platform-cockpit": {
+            "source": "runtime + stores",
+            "fields": [
+                _packet_field("provider", status.get("provider", "unknown")),
+                _packet_field("canaries", canaries.get("total", 0)),
+                _packet_field(
+                    "cift",
+                    f"{cift_latest.get('model_id', 'none')} / {cift_latest.get('status', 'none')}",
+                ),
+            ],
+        },
+        "nimbus-rankings": {
+            "source": "session risk",
+            "fields": [
+                _packet_field("top session", top_session.get("session_id", "none")),
+                _packet_field("nimbus", f"{_num(top_session.get('nimbus_cumulative_score')):.2f}"),
+                _packet_field("latest action", top_session.get("latest_action", "none")),
+            ],
+        },
+        "recent-decisions": {
+            "source": "trace events",
+            "fields": [
+                _packet_field("total", decisions.get("total", len(recent))),
+                _packet_field("latest", latest_decision.get("action", "none")),
+                _packet_field("summary", latest_decision.get("summary", "none")),
+            ],
+        },
+        "eval-summary": {
+            "source": f"evals.{headline}",
+            "fields": [
+                _packet_field(
+                    "detection", f"{_num(metrics.get('attack_detection_rate')):.0%}"
+                ),
+                _packet_field("benign", f"{_num(metrics.get('benign_allow_rate')):.0%}"),
+                _packet_field("latency", f"{_num(metrics.get('avg_latency_ms')):.2f} ms"),
+            ],
+        },
+        "success-criteria": {
+            "source": "eval gates",
+            "fields": [
+                _packet_field("passing", f"{passing_criteria}/{len(criteria)}"),
+                _packet_field("mode", headline),
+                _packet_field("complete", f"{_num(metrics.get('evidence_completeness')):.0%}"),
+            ],
+        },
+        "baseline-vs-protected": {
+            "source": "eval cases",
+            "fields": [
+                _packet_field("cases", len(attacks)),
+                _packet_field("baseline", f"{baseline_leaks} leaks"),
+                _packet_field("aegis", f"{protected_blocks} blocked"),
+            ],
+        },
+        "detector-hit-distribution": {
+            "source": "detector metrics",
+            "fields": [
+                _packet_field("top hit", eval_detector_name),
+                _packet_field("count", eval_detector_count),
+                _packet_field("detectors", len(metrics.get("detector_hit_distribution", {}) or {})),
+            ],
+        },
+    }
+
+    return [
+        {
+            "key": key,
+            "title": title,
+            "copy": copy,
+            "source": payloads.get(key, {}).get("source", "platform.overview"),
+            "fields": payloads.get(key, {}).get("fields", []),
+        }
+        for key, title, copy in _WALKTHROUGH_STEPS
+    ]
+
+
+def _walkthrough_script(
+    data: dict[str, Any],
+    cases: list[dict[str, Any]],
+    headline: str,
+    metrics: dict[str, Any] | None,
+    auto_refresh: int = 0,
+) -> str:
+    steps = _json_for_script(_walkthrough_steps(data, cases, headline, metrics))
     refresh_ms = max(0, int(auto_refresh or 0)) * 1000
     return f"""
 <script>
@@ -455,6 +631,10 @@ def _walkthrough_script(auto_refresh: int = 0) -> str:
   const copy = panel.querySelector(".walkthrough-copy");
   const note = panel.querySelector(".walkthrough-note");
   const stepList = panel.querySelector(".walkthrough-steps");
+  const packet = panel.querySelector(".walkthrough-packet");
+  const packetSource = panel.querySelector(".walkthrough-source");
+  const packetTarget = panel.querySelector(".walkthrough-target");
+  const packetData = panel.querySelector(".walkthrough-data");
   let timer = null;
   let refreshTimer = null;
 
@@ -474,6 +654,32 @@ def _walkthrough_script(auto_refresh: int = 0) -> str:
       if (index === activeIndex) item.classList.add("active");
       item.textContent = `${{index + 1}}. ${{step.title}}`;
       stepList.appendChild(item);
+    }});
+  }}
+
+  function renderPacket(step = null) {{
+    if (!packet) return;
+    const fields = step && Array.isArray(step.fields) ? step.fields : [];
+    if (packetSource) packetSource.textContent = step ? step.source : "platform.overview";
+    if (packetTarget) packetTarget.textContent = step ? step.key : "ready";
+    if (!packetData) return;
+    packetData.innerHTML = "";
+    if (!fields.length) {{
+      const empty = document.createElement("div");
+      empty.className = "walkthrough-data-empty";
+      empty.textContent = "No payload rows for this step.";
+      packetData.appendChild(empty);
+      return;
+    }}
+    fields.forEach((field) => {{
+      const row = document.createElement("div");
+      const label = document.createElement("span");
+      const value = document.createElement("strong");
+      row.className = "walkthrough-data-row";
+      label.textContent = field.label;
+      value.textContent = field.value;
+      row.append(label, value);
+      packetData.appendChild(row);
     }});
   }}
 
@@ -507,6 +713,7 @@ def _walkthrough_script(auto_refresh: int = 0) -> str:
     copy.textContent = step.copy;
     if (note) note.textContent = "Live refresh is paused during this walkthrough.";
     renderStepList(index);
+    renderPacket(step);
     panel.classList.add("active");
     button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
     section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
@@ -522,6 +729,7 @@ def _walkthrough_script(auto_refresh: int = 0) -> str:
     if (copy) copy.textContent = "All operator sections were shown.";
     if (note) note.textContent = "Live refresh has resumed.";
     renderStepList(steps.length);
+    if (packetTarget) packetTarget.textContent = "complete";
     window.setTimeout(() => {{
       clearActive();
       panel.classList.remove("active");
@@ -545,6 +753,7 @@ def _walkthrough_script(auto_refresh: int = 0) -> str:
     }}, intervalMs);
   }});
   renderStepList();
+  renderPacket();
   scheduleRefresh();
 }})();
 </script>
@@ -593,6 +802,18 @@ def render_html(
   <div class="walkthrough-title">Walkthrough</div>
   <div class="walkthrough-copy">Ready.</div>
   <div class="walkthrough-note">Click Run walkthrough to start.</div>
+  <div class="walkthrough-packet" aria-label="Evidence packet">
+    <div class="walkthrough-packet-head">
+      <span>Evidence packet</span>
+      <span class="walkthrough-source mono">platform.overview</span>
+    </div>
+    <div class="walkthrough-flow">
+      <span class="packet-dot" aria-hidden="true"></span>
+      <span class="packet-line" aria-hidden="true"></span>
+      <span class="walkthrough-target">ready</span>
+    </div>
+    <div class="walkthrough-data"></div>
+  </div>
   <div class="walkthrough-steps" aria-label="Walkthrough steps"></div>
 </div>
 
@@ -643,7 +864,7 @@ def render_html(
 
 <div class="hr"></div>
 <div class="empty">Generated by <span class="mono">aegis-dashboard</span> — export an audit bundle at <span class="mono">/api/platform/export?format=md</span>.</div>
-{_walkthrough_script(auto_refresh)}
+{_walkthrough_script(data, cases, headline, m, auto_refresh)}
 </body></html>
 """
 

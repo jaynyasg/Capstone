@@ -157,8 +157,14 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert 'name="aegis-auto-refresh"' in h
     assert "const autoRefreshMs = 5000;" in h
     assert "Live refresh is paused during this walkthrough." in h
+    assert "Evidence packet" in h
+    assert 'class="walkthrough-data"' in h
     assert 'class="walkthrough-steps"' in h
     assert "walkthrough-active" in h
+    assert '"source": "session risk"' in h
+    assert '"label": "top session", "value": "risky"' in h
+    assert '"label": "nimbus", "value": "1.40"' in h
+    assert '"label": "latest", "value": "BLOCK"' in h
     for section_key in [
         "evidence-health",
         "investigate",
