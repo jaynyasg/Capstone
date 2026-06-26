@@ -49,22 +49,42 @@ class SnapshotCache:
         self._cached: PlatformOverview | None = None
         self._generated_at = 0.0  # monotonic reading at last build (for age/refresh)
         self._generated_wall = 0.0  # wall-clock instant at last build (for display)
+        self._failed_at: float | None = None  # monotonic reading of last builder failure
 
     def get(self) -> PlatformOverview:
-        """Return the overview, rebuilding when the cache is empty or past its refresh window."""
+        """Return the overview, rebuilding when the cache is empty or past its refresh window.
+
+        If the builder fails (e.g. a transient SQLite lock) and a prior snapshot exists, serve
+        that snapshot labelled STALE rather than erroring, and back off rebuilding for a short
+        cooldown (one ``refresh_interval``) so a failing builder is not retried on every request.
+        With nothing cached to fall back to, the failure propagates — there is no safe snapshot.
+        """
         now = self._clock()
         age = max(0.0, now - self._generated_at)  # clamp: monotonic should never regress
-        if self._cached is None or age >= self._refresh_interval:
-            overview = self._builder()
+        cooling = self._failed_at is not None and (now - self._failed_at) < self._refresh_interval
+        if self._cached is None or (age >= self._refresh_interval and not cooling):
+            try:
+                overview = self._builder()
+            except Exception:  # noqa: BLE001 - any builder failure degrades to the last good snapshot
+                if self._cached is None:
+                    raise  # nothing cached: no safe snapshot to serve
+                self._failed_at = now
+                return self._cached.model_copy(
+                    update={"snapshot": self._meta(self._generated_wall, FreshnessState.STALE, age)}
+                )
             self._cached = overview
             self._generated_at = now
             self._generated_wall = self._wall_clock()
+            self._failed_at = None  # recovered
             return overview.model_copy(
                 update={"snapshot": self._meta(self._generated_wall, FreshnessState.LIVE, 0.0)}
             )
-        freshness = FreshnessState.STALE if age >= self._stale_after else FreshnessState.CACHED
-        # Reuse cached counts/windows but refresh only the freshness metadata. The cached
-        # overview keeps its health, so warnings remain visible on a cached/stale read.
+        # Serve the cached snapshot. A pending failure keeps it labelled STALE until a rebuild
+        # succeeds; otherwise age decides cached-vs-stale. Health is preserved either way.
+        if self._failed_at is not None:
+            freshness = FreshnessState.STALE
+        else:
+            freshness = FreshnessState.STALE if age >= self._stale_after else FreshnessState.CACHED
         return self._cached.model_copy(
             update={"snapshot": self._meta(self._generated_wall, freshness, age)}
         )

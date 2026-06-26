@@ -9,6 +9,7 @@ dashboard is served from those traces at `GET /`.
 from __future__ import annotations
 
 import os
+import sqlite3
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -112,7 +113,13 @@ def create_app(
         )
 
     def _sync_store() -> None:
-        sync_store(store, settings, canaries=client.registry.safe_records())
+        try:
+            sync_store(store, settings, canaries=client.registry.safe_records())
+        except sqlite3.OperationalError:
+            # A transient lock during import (e.g. a concurrent writer) must not 500 a read: the
+            # store already holds the previously imported rows, so serve those. Raw JSONL remains
+            # the source of truth, so the next successful sync catches up.
+            pass
 
     def _platform_overview(query: EvidenceQuery | None = None) -> PlatformOverview:
         return build_overview_from_store(

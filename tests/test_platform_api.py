@@ -99,6 +99,25 @@ def test_drilldowns_report_truthful_totals_and_bounded_windows(tmp_path) -> None
         assert "total" in envelope
 
 
+def test_drilldown_survives_transient_import_lock(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    c = _client(tmp_path)
+    _seed_block(c)
+    first = c.get("/api/platform/decisions")  # imports the trace into the store
+    assert first.status_code == 200 and first.json()["total"] >= 1
+
+    # A transient SQLite lock on the next import must not 500 the read: the store already holds
+    # the previously imported rows, so the drilldown serves those (raw JSONL stays the source).
+    def _locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("aegis.gateway.app.sync_store", _locked)
+    resp = c.get("/api/platform/decisions")
+    assert resp.status_code == 200  # served prior rows, not a 500
+    assert resp.json()["total"] >= 1
+
+
 def test_export_json_and_markdown_share_scope_and_redact(tmp_path) -> None:
     c = _client(tmp_path)
     plant = _seed_block(c)

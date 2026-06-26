@@ -7,6 +7,8 @@ the stale threshold a cached read is labelled stale; and a cached read never dro
 
 from __future__ import annotations
 
+import pytest
+
 from aegis.platform.evidence import (
     CanaryOverview,
     CiftOverview,
@@ -54,6 +56,19 @@ def _counting_builder():
 
     def builder() -> PlatformOverview:
         state["calls"] += 1
+        return _overview(state["calls"])
+
+    return builder, state
+
+
+def _toggle_builder():
+    """A builder whose ``state['fail']`` flag makes the next build raise."""
+    state = {"calls": 0, "fail": False}
+
+    def builder() -> PlatformOverview:
+        state["calls"] += 1
+        if state["fail"]:
+            raise RuntimeError("builder boom (e.g. transient SQLite lock)")
         return _overview(state["calls"])
 
     return builder, state
@@ -140,6 +155,64 @@ def test_disabled_cache_rebuilds_every_read() -> None:
     assert state["calls"] == 2  # deterministic: every read rebuilds
     assert first.snapshot.freshness is FreshnessState.LIVE
     assert second.snapshot.freshness is FreshnessState.LIVE
+
+
+def test_builder_failure_serves_last_good_snapshot_as_stale() -> None:
+    # A transient builder failure (e.g. a locked SQLite store) must not 500 the dashboard: the
+    # last good snapshot is served, labelled STALE so the operator sees it is not fresh.
+    clock = _Clock()
+    builder, state = _toggle_builder()
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
+    first = cache.get()  # t=0 -> LIVE, total 1
+    assert first.snapshot.freshness is FreshnessState.LIVE
+
+    state["fail"] = True
+    clock.now = 6.0  # past refresh interval -> attempts a rebuild, which fails
+    served = cache.get()
+
+    assert state["calls"] == 2  # the rebuild was attempted
+    assert served.snapshot.freshness is FreshnessState.STALE  # last good, labelled stale
+    assert served.decisions.total == 1  # the last good snapshot's counts, not an error
+    assert served.snapshot.cache_age_seconds == 6.0
+
+
+def test_builder_failure_with_no_cache_propagates() -> None:
+    # With nothing cached to fall back to, a builder failure has no safe answer — it must raise
+    # rather than fabricate an empty snapshot.
+    clock = _Clock()
+    builder, state = _toggle_builder()
+    state["fail"] = True
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
+    with pytest.raises(RuntimeError):
+        cache.get()
+
+
+def test_builder_failure_backs_off_during_cooldown_then_retries() -> None:
+    # After a failure the builder is not retried every request (a short cooldown serves stale),
+    # then a later request retries and recovers to LIVE.
+    clock = _Clock()
+    builder, state = _toggle_builder()
+    cache = SnapshotCache(
+        builder, refresh_interval=5.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
+    cache.get()  # t=0 -> LIVE (calls 1)
+
+    state["fail"] = True
+    clock.now = 6.0
+    cache.get()  # rebuild attempt fails (calls 2), serves stale, enters cooldown
+    clock.now = 9.0  # within the cooldown window (failed at 6, cooldown = refresh_interval 5)
+    cache.get()  # must NOT retry the builder while cooling
+    assert state["calls"] == 2
+
+    state["fail"] = False
+    clock.now = 12.0  # past the cooldown -> retries and recovers
+    recovered = cache.get()
+    assert state["calls"] == 3
+    assert recovered.snapshot.freshness is FreshnessState.LIVE
 
 
 def test_age_uses_monotonic_clock_and_never_negative_on_wall_clock_step_back() -> None:
