@@ -15,7 +15,6 @@ SAMPLE_PLATFORM = {
     "generated_at": 100.0,
     "query": {"limit": 25, "offset": 0, "session_id": None, "action": None, "phase": None},
     "snapshot": {
-        "schema_version": "1.0",
         "generated_at": 100.0,
         "freshness": "live",
         "cache_age_seconds": 0.0,

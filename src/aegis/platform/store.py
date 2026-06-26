@@ -129,9 +129,11 @@ class SnapshotMeta(BaseModel):
 
     In live mode this is ``LIVE`` with zero cache age; the snapshot cache (U6) populates
     ``CACHED``/``STALE`` and static dashboard generation uses ``STATIC``.
+
+    The API version lives once on :class:`PlatformOverview`; this block carries only
+    freshness/provenance and deliberately does not repeat ``schema_version``.
     """
 
-    schema_version: str = SCHEMA_VERSION
     generated_at: float = Field(default_factory=time.time)
     freshness: FreshnessState = FreshnessState.LIVE
     cache_age_seconds: float = 0.0

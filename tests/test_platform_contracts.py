@@ -97,8 +97,10 @@ def test_record_window_defaults_are_empty_and_truthful() -> None:
     assert window.query.limit == DEFAULT_LIMIT
 
 
-def test_snapshot_meta_defaults_to_live_current_schema() -> None:
+def test_snapshot_meta_omits_schema_version_and_defaults_to_live() -> None:
+    # schema_version is an API-level field on PlatformOverview; the snapshot block carries
+    # only freshness/provenance, so it must not duplicate the API version (residual #10).
     meta = SnapshotMeta(generated_at=10.0)
-    assert meta.schema_version == SCHEMA_VERSION
+    assert "schema_version" not in SnapshotMeta.model_fields
     assert meta.freshness is FreshnessState.LIVE
     assert meta.cache_age_seconds == 0.0

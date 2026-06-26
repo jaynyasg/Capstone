@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable
 
 from aegis.platform.evidence import PlatformOverview
-from aegis.platform.store import SCHEMA_VERSION, FreshnessState, SnapshotMeta
+from aegis.platform.store import FreshnessState, SnapshotMeta
 
 
 class SnapshotCache:
@@ -74,7 +74,6 @@ class SnapshotCache:
 
     def _meta(self, generated_at: float, freshness: FreshnessState, age: float) -> SnapshotMeta:
         return SnapshotMeta(
-            schema_version=SCHEMA_VERSION,
             generated_at=generated_at,
             freshness=freshness,
             cache_age_seconds=age,
