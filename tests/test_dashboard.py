@@ -163,9 +163,15 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert 'data-policy-mode="strict"' in h
     assert 'id="selected-policy-mode"' in h
     assert "const initialPolicyMode = &quot;balanced&quot;" not in h
-    assert 'const initialPolicyMode = "balanced";' in h
+    assert 'const initialPolicyMode = "observe";' in h
+    assert "Observe + Learn" in h
+    assert "demo policy" in h
     assert "setPolicyMode" in h
     assert "policy_mode: selectedPolicyMode" in h
+    assert "const walkthroughSamples =" in h
+    assert 'const sampleStorageKey = "aegis.walkthrough.sampleIndex";' in h
+    assert "function nextSampleForRun()" in h
+    assert "activeSample = nextSampleForRun();" in h
     assert 'id="walkthrough-status"' in h
     assert 'id="dashboard-auto-refresh"' in h
     assert 'name="aegis-auto-refresh"' in h
@@ -179,13 +185,17 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "walkthrough-active" in h
     assert "Prompt/input" in h
     assert "Policy mode" in h
+    assert "Scenario" in h
     assert "Guard call" in h
     assert "Data query" in h
     assert "Try this prompt" in h
     assert "Open in Test Console" in h
     assert "Copy prompt" in h
     assert "Live guard test runs automatically" in h
-    assert "Testing ${step.guard} in ${selectedPolicyMode} mode with this prompt" in h
+    assert (
+        "Testing ${guardPath} in ${policyModeLabel(selectedPolicyMode)} mode with this prompt"
+        in h
+    )
     assert "walkthrough-live-detectors" in h
     assert "recordLiveDetectorHits" in h
     assert "No user prompt" not in h

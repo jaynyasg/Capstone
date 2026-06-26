@@ -72,8 +72,8 @@ input{background:var(--surface);color:var(--fg);border:1px solid var(--border);b
 
 <div class="label">4 · Policy mode</div>
 <div class="seg" id="policy-modes" role="group" aria-label="policy mode">
-  <button data-policy="observe">Observe<span class="hint">detect only</span></button>
-  <button data-policy="balanced" class="active">Balanced<span class="hint">default</span></button>
+  <button data-policy="observe" class="active">Observe + Learn<span class="hint">trains online</span></button>
+  <button data-policy="balanced">Balanced<span class="hint">default</span></button>
   <button data-policy="strict">Strict<span class="hint">conservative</span></button>
 </div>
 
@@ -89,7 +89,7 @@ input{background:var(--surface);color:var(--fg);border:1px solid var(--border);b
 <script>
 const COLOR = {ALLOW:'var(--allow)',WARN:'var(--warn)',SANITIZE:'var(--accent)',BLOCK:'var(--block)',ESCALATE:'var(--escalate)'};
 let mode = 'response';
-let policyMode = 'balanced';
+let policyMode = 'observe';
 
 document.querySelectorAll('.chip').forEach(c => c.onclick = () => { document.getElementById('msg').value = c.dataset.fill; });
 function setMode(next){

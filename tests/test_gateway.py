@@ -109,6 +109,27 @@ def test_direct_guard_endpoint_accepts_policy_mode_override(tmp_path) -> None:
     assert balanced["action"] == "BLOCK"
 
 
+def test_observe_policy_override_trains_then_blocks_repeat(tmp_path) -> None:
+    pytest.importorskip("torch")
+    c = _client(tmp_path, MockProvider())
+    body = {
+        "session_id": "gateway-observe-training",
+        "policy_mode": "observe",
+        "output": f"leak {FAKE_GITHUB_PAT}",
+    }
+
+    first = c.post("/guard/response", json=body).json()
+    second = c.post("/guard/response", json=body).json()
+
+    assert first["action"] == "ALLOW"
+    assert second["action"] == "BLOCK"
+    assert any(
+        hit["detector_name"] == "observe_ml_learner"
+        and hit["evidence"]["status"] == "ml_matched"
+        for hit in second["detector_hits"]
+    )
+
+
 def test_canary_plant_endpoint_tracks_lifecycle_without_logging_token(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     r = c.post(

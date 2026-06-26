@@ -241,18 +241,22 @@ appears in model-visible context.
 
 | Mode | Behavior |
 | --- | --- |
-| `observe` | Never blocks; records evidence and risk for baseline comparison. |
+| `observe` | **Observe + Learn**. Records evidence and risk for baseline comparison. First-time leaks pass, then train a tiny online PyTorch learner on numeric features; repeated learned leak patterns are blocked by `observe_ml_learner`. |
 | `balanced` | Blocks high-confidence leaks, canaries, tool-call exfiltration, budget exhaustion; warns on ambiguous cases. |
 | `strict` | Conservative — elevates most suspicious signals to a block. |
 
 Set via `AEGIS_POLICY_MODE` or `policy.yaml`. Rules are independent; the engine takes the
-most severe action.
+most severe action. Observe-mode learning is actual runtime ML training when the `ml` extra
+is available: it updates a tiny MLP from redacted detector evidence and numeric features.
+The online learner does not store raw prompt or secret text; if PyTorch is unavailable, its
+trace evidence reports `ml_unavailable` instead of pretending to train.
 
-The deployed dashboard and `/try` Test Console also include an **Observe / Balanced /
-Strict** selector. That selector sends `policy_mode` on the live guard request so demos can
-show the same prompt passing in `observe`, blocking in `balanced`, and tightening further in
-`strict` without restarting the service. The server's configured mode remains the default
-for normal traffic and for requests that omit `policy_mode`.
+The deployed dashboard and `/try` Test Console also include an **Observe + Learn / Balanced
+/ Strict** selector. It defaults to **Observe + Learn** and sends `policy_mode` on the live
+guard request so demos can show first-time observe evidence, online ML training,
+repeat-pattern prevention, `balanced` blocking, and `strict` tightening without restarting
+the service. The server's configured mode remains the default for normal traffic and for
+requests that omit `policy_mode`.
 
 ## Evaluation
 
@@ -272,16 +276,19 @@ Headline result (**balanced** mode):
 | avg latency / turn | < 1 ms |
 
 All four PRD success criteria pass: unsafe handled ≥ 0.8, benign allowed ≥ 0.8, tool-call
-injection blocked, honeytoken blocked. `observe` mode deliberately detects 0 (the baseline);
-`strict` blocks drip one turn earlier.
+injection blocked, honeytoken blocked. The one-pass eval suite still treats `observe` as the
+baseline comparison mode; repeat-leak prevention is exercised by the live guard and unit
+tests. `strict` blocks drip one turn earlier.
 
 ## Evidence and learning
 
-Aegis accumulates evidence, but it does **not** silently self-train in the live enforcement
-path. Runtime traces, eval artifacts, detector evidence, and canary lifecycle records are the
-audit trail. Teams can promote that evidence into new YAML eval cases, dashboard reports, or
-an offline ML-probe training run; production decisions remain deterministic and reviewable
-unless a new detector or policy change is explicitly shipped.
+Aegis accumulates evidence in two ways. Runtime traces, eval artifacts, detector evidence,
+and canary lifecycle records remain the durable audit trail. In **Observe + Learn** mode,
+the running gateway also trains a tiny online PyTorch learner from observed leak feature
+vectors so repeated learned patterns can be blocked during that process lifetime. Teams can
+still promote evidence into new YAML eval cases, dashboard reports, or the offline ML-probe
+training run; deterministic detectors and explicit policy rules remain the primary reviewed
+enforcement surface.
 
 The platform layer turns that evidence into one read-only contract the gateway API, the
 dashboard, and audit exports all consume — see [Production platform layer](#production-platform-layer-vnext).
@@ -374,6 +381,10 @@ A small PyTorch MLP scores normalized events as one extra signal. It is **never
 authoritative**: it caps its recommendation at WARN and degrades to a no-op (recorded in the
 trace) if torch or the model artifact is absent.
 
+This offline-trained probe is separate from **Observe + Learn**. Observe + Learn trains a
+runtime MLP inside the running gateway from observed leak feature vectors; the optional probe
+is a prebuilt auxiliary score loaded from `models/aegis_risk_probe.pt`.
+
 ```bash
 uv sync --extra ml
 uv run aegis-train-probe                 # → models/aegis_risk_probe.pt
@@ -424,13 +435,14 @@ LLM, Braintrust, and the trained ML probe are exercised on demand, never on the 
 The deployed dashboard includes a **Run walkthrough** button that pauses live refresh,
 scrolls through each operator section, and shows a step-by-step progress rail plus a
 large evidence packet attached to the active section. The dashboard header includes an
-**Observe / Balanced / Strict** selector; each packet calls out the selected policy mode,
-the active prompt/input or operator query, the platform data source being read, and the
-values produced for that step. Each step also runs a sample prompt through the live guard
-endpoint with the selected policy mode and includes a link that opens the same prompt
-prefilled in the Test Console. Detector evidence is split into a saved **Eval detector hit
-distribution** and a per-run **Live walkthrough detector hits** chart that increments from
-those live guard responses.
+**Observe + Learn / Balanced / Strict** selector. Each button click chooses one sample prompt for
+the whole 9-step walkthrough, runs that same prompt through every section, and rotates to a
+different sample on the next click. Each packet calls out the selected policy mode, active
+scenario, prompt/input or operator query, platform data source, and values produced for that
+step. Each step also runs the sample prompt through the live guard endpoint with the selected
+policy mode and includes a link that opens the same prompt prefilled in the Test Console.
+Detector evidence is split into a saved **Eval detector hit distribution** and a per-run
+**Live walkthrough detector hits** chart that increments from those live guard responses.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 

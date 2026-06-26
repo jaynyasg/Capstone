@@ -24,6 +24,7 @@ from aegis.detectors._credutil import redact_text
 from aegis.detectors.base import ScanContext
 from aegis.detectors.encodings import EncodingScanner
 from aegis.detectors.honeytokens import HoneytokenDetector, HoneytokenRegistry
+from aegis.detectors.ml.online import ObserveOnlineLearner
 from aegis.detectors.nimbus import NimbusLedger
 from aegis.detectors.partial import PartialLeakDetector
 from aegis.detectors.patterns import SecretPatternScanner
@@ -70,6 +71,7 @@ class AegisClient:
             from aegis.detectors.ml.probe import MLRiskProbe
 
             self.ml_probe = MLRiskProbe(self.settings.ml_probe_path)
+        self.observe_training = ObserveOnlineLearner()
 
     # ----- guard surface -------------------------------------------------
 
@@ -215,9 +217,26 @@ class AegisClient:
                 self.ml_probe.score(scan_ctx, results, self.nimbus.cumulative(ctx.session_id))
             )
 
+        training_result = None
+        if policy.mode is PolicyMode.OBSERVE:
+            training_result = self.observe_training.evaluate(
+                ctx, results, self.nimbus.cumulative(ctx.session_id)
+            )
+            if training_result is not None:
+                results.append(training_result)
+
         # Enforce.
         decision = policy.decide(results)
         decision = _apply_broker_override(decision, assessment)
+        decision = _apply_observe_learning_override(decision, training_result)
+        if (
+            training_result is not None
+            and training_result.evidence.get("status") == "ml_trained"
+            and decision.allowed
+        ):
+            decision.reasons.append(
+                "observe_ml_learner: trained online model from observed leak evidence"
+            )
         self._mark_detected_canaries(results)
 
         event = self._build_event(ctx, results, decision, assessment, metadata, policy.mode)
@@ -316,6 +335,17 @@ def _apply_broker_override(decision: AegisDecision, assessment) -> AegisDecision
     decision.action = most_severe([decision.action, assessment.forced_action])
     decision.risk_score = max(decision.risk_score, 1.0)
     decision.reasons.append("credential_broker: raw secret in model-visible context")
+    return decision
+
+
+def _apply_observe_learning_override(
+    decision: AegisDecision, training_result: DetectorResult | None
+) -> AegisDecision:
+    if training_result is None or training_result.recommended_action is not Action.BLOCK:
+        return decision
+    decision.action = Action.BLOCK
+    decision.risk_score = max(decision.risk_score, training_result.score)
+    decision.reasons.append("observe_ml_learner: online model blocked repeated leak pattern")
     return decision
 
 

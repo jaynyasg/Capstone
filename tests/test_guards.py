@@ -50,6 +50,32 @@ def test_guard_call_policy_mode_override_observes_without_blocking(tmp_path) -> 
     assert any(hit.recommended_action == Action.BLOCK for hit in decision.detector_hits)
 
 
+def test_observe_mode_learns_and_blocks_repeated_leak(tmp_path) -> None:
+    pytest.importorskip("torch")
+    client = make_client(tmp_path, mode=PolicyMode.OBSERVE)
+    output = f"Sure, the key is {FAKE_GITHUB_PAT}"
+
+    first = client.guard_response(output, session_id="observe-training")
+    second = client.guard_response(output, session_id="observe-training")
+
+    assert first.action == Action.ALLOW
+    assert any(
+        hit.detector_name == "observe_ml_learner"
+        and hit.evidence["status"] == "ml_trained"
+        and hit.evidence["ml_trained"] is True
+        for hit in first.detector_hits
+    )
+    assert second.action == Action.BLOCK
+    assert any(
+        hit.detector_name == "observe_ml_learner"
+        and hit.evidence["status"] == "ml_matched"
+        for hit in second.detector_hits
+    )
+    assert FAKE_GITHUB_PAT not in (tmp_path / "traces" / "observe-training.jsonl").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_tool_call_exfiltration_blocks(tmp_path) -> None:
     client = make_client(tmp_path)
     decision = client.guard_tool_call(
