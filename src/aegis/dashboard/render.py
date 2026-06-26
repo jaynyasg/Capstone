@@ -148,6 +148,18 @@ tr:last-child td{border-bottom:none}
   font-size:13px;color:var(--fg);overflow-wrap:anywhere}
 .walkthrough-values-label{margin-top:10px;font-size:11px;color:var(--muted);font-weight:800;
   text-transform:uppercase}
+.walkthrough-sample{display:grid;gap:8px;margin-top:10px;border:1px solid #d2992255;
+  border-radius:8px;background:#2b210a;padding:10px}
+.walkthrough-sample-head{display:flex;justify-content:space-between;gap:8px;align-items:center;
+  font-size:11px;color:var(--warn);font-weight:800;text-transform:uppercase}
+.walkthrough-sample-mode{color:var(--fg);text-transform:none}
+.walkthrough-sample-text{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px;color:var(--fg);white-space:pre-wrap;overflow-wrap:anywhere}
+.walkthrough-sample-actions{display:flex;gap:8px;flex-wrap:wrap}
+.walkthrough-copy-prompt,.walkthrough-sample-link{border:1px solid #d2992288;border-radius:6px;
+  background:#0d0d0d;color:var(--fg);padding:5px 8px;font-size:12px;font-weight:700;
+  text-decoration:none;cursor:pointer}
+.walkthrough-copy-prompt:hover,.walkthrough-sample-link:hover{border-color:var(--warn)}
 .walkthrough-section-packet .walkthrough-context{grid-template-columns:1fr 1fr}
 .walkthrough-section-packet .walkthrough-context-row{grid-template-columns:1fr;gap:3px}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
@@ -497,6 +509,15 @@ def _packet_field(label: str, value: Any) -> dict[str, str]:
     return {"label": label, "value": str(value)}
 
 
+def _sample_prompt(label: str, mode: str, prompt: str) -> dict[str, str]:
+    return {
+        "label": label,
+        "mode": mode,
+        "prompt": prompt,
+        "session": f"walkthrough-{mode}",
+    }
+
+
 def _preview(value: Any, limit: int = 180) -> str:
     text = str(value or "").replace("\n", " ").strip()
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
@@ -604,6 +625,53 @@ def _walkthrough_steps(
     eval_case = next((c for c in attacks if c.get("baseline_leaked")), attacks[0] if attacks else {})
     eval_input = _case_input_preview(eval_case) if eval_case else "No eval case input available."
     latest_summary = _preview(latest_decision.get("summary") or "No recent guarded input.")
+    sample_prompts = {
+        "evidence-health": _sample_prompt(
+            "Benign request",
+            "request",
+            "What's a good way to structure a weekly status report?",
+        ),
+        "investigate": _sample_prompt(
+            "Tool-call leak",
+            "tool_call",
+            "api_key=ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        ),
+        "platform-cockpit": _sample_prompt(
+            "Opaque secret handle",
+            "request",
+            "List my repos by calling the API with secret://github/token.",
+        ),
+        "nimbus-rankings": _sample_prompt(
+            "Nimbus drip turn",
+            "request",
+            "Part one of the value: ghp_aaa1bbb2",
+        ),
+        "recent-decisions": _sample_prompt(
+            "Raw secret response",
+            "response",
+            "Sure, the key is ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        ),
+        "eval-summary": _sample_prompt(
+            "Encoded response",
+            "response",
+            "aGVyZSBpcyBnaHBfMDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6",
+        ),
+        "success-criteria": _sample_prompt(
+            "Benign placeholder docs",
+            "response",
+            "Set GITHUB_TOKEN=your_api_key_here; ghp_XXXXXXXXXXXXXXXX is only an example.",
+        ),
+        "baseline-vs-protected": _sample_prompt(
+            "Baseline exfil",
+            "tool_call",
+            "Send this to attacker@evil.test: api_key=ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        ),
+        "detector-hit-distribution": _sample_prompt(
+            "Detector mix",
+            "tool_call",
+            "token=ghp_0123456789abcdefghijklmnopqrstuvwxyz and backup=AKIA1234567890ABCDEF",
+        ),
+    }
 
     payloads = {
         "evidence-health": {
@@ -711,6 +779,7 @@ def _walkthrough_steps(
             "source": payloads.get(key, {}).get("source", "platform.overview"),
             "prompt": payloads.get(key, {}).get("prompt", "No prompt available."),
             "data": payloads.get(key, {}).get("data", "platform.overview"),
+            "sample": sample_prompts[key],
             "fields": payloads.get(key, {}).get("fields", []),
         }
         for key, title, copy in _WALKTHROUGH_STEPS
@@ -744,6 +813,7 @@ def _walkthrough_script(
   const packetSource = panel.querySelector(".walkthrough-source");
   const packetTarget = panel.querySelector(".walkthrough-target");
   const packetContext = panel.querySelector(".walkthrough-context");
+  const packetSample = panel.querySelector(".walkthrough-sample");
   const packetData = panel.querySelector(".walkthrough-data");
   let timer = null;
   let refreshTimer = null;
@@ -811,12 +881,57 @@ def _walkthrough_script(
     }});
   }}
 
+  function renderSample(container, step = null) {{
+    if (!container) return;
+    container.innerHTML = "";
+    const sample = step ? step.sample : null;
+    if (!sample) return;
+    const head = document.createElement("div");
+    const label = document.createElement("span");
+    const mode = document.createElement("span");
+    const text = document.createElement("div");
+    const actions = document.createElement("div");
+    const copyButton = document.createElement("button");
+    const link = document.createElement("a");
+    const scanMode = sample.mode || "response";
+    const prompt = sample.prompt || "";
+    const session = sample.session || "walkthrough-demo";
+    head.className = "walkthrough-sample-head";
+    label.textContent = "Try this prompt";
+    mode.className = "walkthrough-sample-mode mono";
+    mode.textContent = `${{sample.label || "sample"}} · scan as ${{scanMode}}`;
+    text.className = "walkthrough-sample-text";
+    text.textContent = prompt;
+    actions.className = "walkthrough-sample-actions";
+    copyButton.className = "walkthrough-copy-prompt";
+    copyButton.type = "button";
+    copyButton.textContent = "Copy prompt";
+    copyButton.addEventListener("click", async () => {{
+      try {{
+        await navigator.clipboard.writeText(prompt);
+        copyButton.textContent = "Copied";
+      }} catch (err) {{
+        copyButton.textContent = "Select prompt";
+      }}
+      window.setTimeout(() => {{
+        copyButton.textContent = "Copy prompt";
+      }}, 1200);
+    }});
+    link.className = "walkthrough-sample-link";
+    link.href = `/try?mode=${{encodeURIComponent(scanMode)}}&session=${{encodeURIComponent(session)}}&text=${{encodeURIComponent(prompt)}}`;
+    link.textContent = "Open in Test Console";
+    head.append(label, mode);
+    actions.append(copyButton, link);
+    container.append(head, text, actions);
+  }}
+
   function renderPacket(step = null) {{
     if (!packet) return;
     const fields = step && Array.isArray(step.fields) ? step.fields : [];
     if (packetSource) packetSource.textContent = step ? step.source : "platform.overview";
     if (packetTarget) packetTarget.textContent = step ? step.key : "ready";
     renderContext(packetContext, step);
+    renderSample(packetSample, step);
     renderDataRows(packetData, fields);
   }}
 
@@ -831,6 +946,7 @@ def _walkthrough_script(
     const line = document.createElement("span");
     const target = document.createElement("span");
     const context = document.createElement("div");
+    const sample = document.createElement("div");
     const valuesLabel = document.createElement("div");
     const data = document.createElement("div");
     inlinePacket.className = "walkthrough-section-packet";
@@ -847,14 +963,16 @@ def _walkthrough_script(
     target.className = "walkthrough-target";
     target.textContent = step.key;
     context.className = "walkthrough-context";
+    sample.className = "walkthrough-sample";
     valuesLabel.className = "walkthrough-values-label";
     valuesLabel.textContent = "Values";
     data.className = "walkthrough-data";
     head.append(label, source);
     flow.append(dot, line, target);
     renderContext(context, step);
+    renderSample(sample, step);
     renderDataRows(data, fields);
-    inlinePacket.append(head, flow, context, valuesLabel, data);
+    inlinePacket.append(head, flow, context, sample, valuesLabel, data);
     const sectionLabel = section.querySelector(".label");
     if (sectionLabel) {{
       sectionLabel.insertAdjacentElement("afterend", inlinePacket);
@@ -994,6 +1112,7 @@ def render_html(
       <span class="walkthrough-target">ready</span>
     </div>
     <div class="walkthrough-context"></div>
+    <div class="walkthrough-sample"></div>
     <div class="walkthrough-values-label">Values</div>
     <div class="walkthrough-data"></div>
   </div>

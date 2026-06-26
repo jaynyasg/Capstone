@@ -171,7 +171,13 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(active_packet).to_contain_text("Evidence packet arrived")
             sync_api.expect(active_packet).to_contain_text("Prompt/input")
             sync_api.expect(active_packet).to_contain_text("Data query")
+            sync_api.expect(active_packet).to_contain_text("Try this prompt")
+            sync_api.expect(active_packet).to_contain_text("weekly status report")
             sync_api.expect(active_packet).to_contain_text("healthy")
+            sample_link = active_packet.locator(".walkthrough-sample-link")
+            sync_api.expect(sample_link).to_have_attribute(
+                "href", re.compile(r"/try\?mode=request")
+            )
             assert page.locator("#dashboard-auto-refresh").get_attribute("data-state") == "paused"
             page.wait_for_timeout(2500)
             sync_api.expect(page.locator("#walkthrough-status.active")).to_be_visible()
@@ -183,6 +189,9 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(
                 page.locator('section[data-section="investigate"] .walkthrough-section-packet')
             ).to_contain_text("Operator query links")
+            sync_api.expect(
+                page.locator('section[data-section="investigate"] .walkthrough-section-packet')
+            ).to_contain_text("api_key=ghp_")
             active_path = artifact_dir / "walkthrough-first-step.png"
             page.screenshot(path=active_path, full_page=False)
             assert active_path.stat().st_size > 1_000

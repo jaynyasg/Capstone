@@ -84,10 +84,22 @@ const COLOR = {ALLOW:'var(--allow)',WARN:'var(--warn)',SANITIZE:'var(--accent)',
 let mode = 'response';
 
 document.querySelectorAll('.chip').forEach(c => c.onclick = () => { document.getElementById('msg').value = c.dataset.fill; });
-document.querySelectorAll('#modes button').forEach(b => b.onclick = () => {
+function setMode(next){
+  if(!['request','response','tool_call'].includes(next)) return;
   document.querySelectorAll('#modes button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active'); mode = b.dataset.mode;
-});
+  const selected = document.querySelector(`#modes button[data-mode="${next}"]`);
+  if(selected) selected.classList.add('active');
+  mode = next;
+}
+document.querySelectorAll('#modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+
+const params = new URLSearchParams(window.location.search);
+const presetText = params.get('text') || params.get('prompt');
+const presetSession = params.get('session');
+const presetMode = params.get('mode');
+if(presetText) document.getElementById('msg').value = presetText;
+if(presetSession) document.getElementById('sess').value = presetSession;
+if(presetMode) setMode(presetMode);
 
 async function runTest(){
   const text = document.getElementById('msg').value;

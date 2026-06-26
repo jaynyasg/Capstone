@@ -205,6 +205,15 @@ def test_try_console_served(tmp_path) -> None:
     assert "/guard/response" in r.text  # the form posts to the real guard endpoint
 
 
+def test_try_console_supports_walkthrough_prefill_links(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    r = c.get("/try?mode=tool_call&session=walkthrough&text=api_key%3Dghp_demo")
+    assert r.status_code == 200
+    assert "URLSearchParams" in r.text
+    assert "presetText" in r.text
+    assert "setMode(presetMode)" in r.text
+
+
 def test_favicon_no_content(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     assert c.get("/favicon.ico").status_code == 204
