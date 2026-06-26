@@ -33,6 +33,7 @@ SECTION_KEYS = [
     "success-criteria",
     "baseline-vs-protected",
     "detector-hit-distribution",
+    "live-walkthrough-detectors",
 ]
 
 
@@ -150,6 +151,28 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
                 render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES, auto_refresh=2),
                 encoding="utf-8",
             )
+            page.add_init_script(
+                """
+                const realFetch = window.fetch.bind(window);
+                window.fetch = async (url, options) => {
+                  if (String(url).includes("/guard/")) {
+                    return new Response(JSON.stringify({
+                      action: "BLOCK",
+                      risk_score: 1.0,
+                      detector_hits: [{
+                        detector_name: "tool_call_argument_scanner",
+                        recommended_action: "BLOCK"
+                      }],
+                      reasons: ["mock visual detector hit"]
+                    }), {
+                      status: 200,
+                      headers: { "content-type": "application/json" }
+                    });
+                  }
+                  return realFetch(url, options);
+                };
+                """
+            )
             page.goto(refresh_path.as_uri())
             button = page.locator("#walkthrough-run")
             sync_api.expect(button).to_be_visible()
@@ -176,6 +199,12 @@ def test_dashboard_sections_have_visual_smoke_screenshots(tmp_path: Path) -> Non
             sync_api.expect(active_packet).to_contain_text("weekly status report")
             sync_api.expect(active_packet).to_contain_text("Live guard test")
             sync_api.expect(active_packet).to_contain_text("healthy")
+            sync_api.expect(page.locator("#walkthrough-live-detectors")).to_contain_text(
+                "tool_call_argument_scanner"
+            )
+            sync_api.expect(page.locator("#walkthrough-live-detectors")).to_contain_text(
+                "1 live guard response"
+            )
             sample_link = active_packet.locator(".walkthrough-sample-link")
             sync_api.expect(sample_link).to_have_attribute(
                 "href", re.compile(r"/try\?mode=request")

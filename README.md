@@ -420,7 +420,9 @@ scrolls through each operator section, and shows a step-by-step progress rail pl
 large evidence packet attached to the active section. Each packet calls out the active
 prompt/input or operator query, the platform data source being read, and the values
 produced for that step. Each step also runs a sample prompt through the live guard endpoint
-and includes a link that opens the same prompt prefilled in the Test Console.
+and includes a link that opens the same prompt prefilled in the Test Console. Detector
+evidence is split into a saved **Eval detector hit distribution** and a per-run **Live
+walkthrough detector hits** chart that increments from those live guard responses.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 

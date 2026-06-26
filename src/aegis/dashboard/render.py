@@ -193,8 +193,8 @@ _WALKTHROUGH_STEPS = [
     ("baseline-vs-protected", "Baseline vs protected", "Compare vulnerable baseline behavior to Aegis."),
     (
         "detector-hit-distribution",
-        "Detector hit distribution",
-        "Scan which detectors are carrying the evidence.",
+        "Eval detector hit distribution",
+        "Scan which detectors carried the saved eval evidence.",
     ),
 ]
 
@@ -318,6 +318,15 @@ def _distribution(m: dict[str, Any]) -> str:
             f'<span class="det">{_esc(f"{count:g}")}</span></div>'
         )
     return "".join(rows)
+
+
+def _live_walkthrough_distribution() -> str:
+    return (
+        '<div id="walkthrough-live-detectors" class="card live-detector-card" '
+        'aria-live="polite">'
+        '<div class="empty">Run walkthrough to collect live guard detector hits. '
+        "This resets each run.</div></div>"
+    )
 
 
 def _note(text: str) -> str:
@@ -814,8 +823,11 @@ def _walkthrough_script(
   const packetContext = panel.querySelector(".walkthrough-context");
   const packetSample = panel.querySelector(".walkthrough-sample");
   const packetData = panel.querySelector(".walkthrough-data");
+  const liveDetectorChart = document.getElementById("walkthrough-live-detectors");
   let timer = null;
   let refreshTimer = null;
+  let liveDetectorResponses = 0;
+  const liveDetectorCounts = new Map();
 
   function clearActive() {{
     document.querySelectorAll(".walkthrough-active").forEach((el) => {{
@@ -961,12 +973,65 @@ def _walkthrough_script(
   }}
 
   function detectorNames(decision) {{
+    const names = detectorHitNames(decision);
+    return names.join(", ") || "none";
+  }}
+
+  function detectorHitNames(decision) {{
     const hits = Array.isArray(decision.detector_hits) ? decision.detector_hits : [];
-    const names = hits
+    return [...new Set(hits
       .filter((hit) => hit.recommended_action && hit.recommended_action !== "ALLOW")
       .map((hit) => hit.detector_name)
-      .filter(Boolean);
-    return [...new Set(names)].join(", ") || "none";
+      .filter(Boolean))];
+  }}
+
+  function renderLiveDetectorChart() {{
+    if (!liveDetectorChart) return;
+    liveDetectorChart.innerHTML = "";
+    const summary = document.createElement("div");
+    summary.className = "det";
+    summary.textContent = `${{liveDetectorResponses}} live guard response${{liveDetectorResponses === 1 ? "" : "s"}} in this walkthrough`;
+    liveDetectorChart.appendChild(summary);
+    const rows = [...liveDetectorCounts.entries()].sort((a, b) => b[1] - a[1]);
+    if (!rows.length) {{
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = liveDetectorResponses
+        ? "No detector hits from live walkthrough prompts yet."
+        : "Run walkthrough to collect live guard detector hits. This resets each run.";
+      liveDetectorChart.appendChild(empty);
+      return;
+    }}
+    const top = Math.max(...rows.map(([, count]) => count));
+    rows.forEach(([name, count]) => {{
+      const row = document.createElement("div");
+      const label = document.createElement("span");
+      const bar = document.createElement("span");
+      const value = document.createElement("span");
+      row.className = "barrow";
+      label.className = "det";
+      label.textContent = name;
+      bar.className = "bar";
+      bar.style.width = `${{top ? Math.round((100 * count) / top) : 0}}%`;
+      value.className = "det";
+      value.textContent = String(count);
+      row.append(label, bar, value);
+      liveDetectorChart.appendChild(row);
+    }});
+  }}
+
+  function resetLiveDetectorChart() {{
+    liveDetectorResponses = 0;
+    liveDetectorCounts.clear();
+    renderLiveDetectorChart();
+  }}
+
+  function recordLiveDetectorHits(decision) {{
+    liveDetectorResponses += 1;
+    detectorHitNames(decision).forEach((name) => {{
+      liveDetectorCounts.set(name, (liveDetectorCounts.get(name) || 0) + 1);
+    }});
+    renderLiveDetectorChart();
   }}
 
   let testSerial = 0;
@@ -986,6 +1051,7 @@ def _walkthrough_script(
       if (!response.ok) {{
         throw new Error(decision.detail || `HTTP ${{response.status}}`);
       }}
+      recordLiveDetectorHits(decision);
       const action = decision.action || "UNKNOWN";
       const risk = Number(decision.risk_score || 0).toFixed(2);
       updateLiveResult(
@@ -1117,6 +1183,7 @@ def _walkthrough_script(
   button.addEventListener("click", () => {{
     if (timer) window.clearInterval(timer);
     pauseRefresh();
+    resetLiveDetectorChart();
     button.disabled = true;
     button.textContent = "Running...";
     let index = 0;
@@ -1132,6 +1199,7 @@ def _walkthrough_script(
   }});
   renderStepList();
   renderPacket();
+  renderLiveDetectorChart();
   scheduleRefresh();
 }})();
 </script>
@@ -1239,8 +1307,13 @@ def render_html(
 </section>
 
 <section class="dashboard-section" data-section="detector-hit-distribution">
-<div class="label">Detector hit distribution</div>
+<div class="label">Eval detector hit distribution</div>
 <div class="card">{distribution}</div>
+</section>
+
+<section class="dashboard-section" data-section="live-walkthrough-detectors">
+<div class="label">Live walkthrough detector hits</div>
+{_live_walkthrough_distribution()}
 </section>
 
 <div class="hr"></div>
