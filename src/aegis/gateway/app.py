@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import FastAPI, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 
 from aegis.cift import CiftCalibrationRequest, CiftCertificationStore, calibrate_model
@@ -312,12 +312,19 @@ def create_app(
         action: str | None = None,
         phase: str | None = None,
     ) -> Any:
+        # Validate the format up front so an unknown value is a clear 400, never a silent
+        # JSON default, and a bad request skips the (heavier) overview/bundle build.
+        fmt_norm = fmt.lower()
+        if fmt_norm not in ("json", "md", "markdown"):
+            raise HTTPException(
+                status_code=400, detail=f"unsupported format '{fmt}'; use one of: json, md"
+            )
         query = _query(
             limit=limit, offset=offset, session_id=session_id, action=action, phase=phase
         )
         overview = _platform_overview(query)
         bundle = collect_audit_bundle(overview=overview, store=store, query=query)
-        if fmt.lower() in ("md", "markdown"):
+        if fmt_norm in ("md", "markdown"):
             return Response(
                 render_markdown_bundle(bundle), media_type="text/markdown; charset=utf-8"
             )

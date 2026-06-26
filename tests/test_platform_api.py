@@ -101,6 +101,19 @@ def test_export_json_and_markdown_share_scope_and_redact(tmp_path) -> None:
     assert plant["token"] not in md.text
 
 
+def test_export_unknown_format_is_rejected_not_silently_json(tmp_path) -> None:
+    c = _client(tmp_path)
+    _seed_block(c)
+
+    bad = c.get("/api/platform/export", params={"format": "csv"})
+    assert bad.status_code == 400  # unknown format rejected, never a silent JSON default
+
+    # The supported formats still succeed (json is also the no-param default).
+    assert c.get("/api/platform/export", params={"format": "json"}).status_code == 200
+    assert c.get("/api/platform/export", params={"format": "md"}).status_code == 200
+    assert c.get("/api/platform/export").status_code == 200
+
+
 def test_api_and_export_preserve_secret_redaction(tmp_path) -> None:
     c = _client(tmp_path)
     c.post("/guard/response", json={"session_id": "s1", "output": f"the key is {FAKE_GITHUB_PAT}"})
