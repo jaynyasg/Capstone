@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from aegis.config import Settings
+from aegis.evals.cases import DEFAULT_CASES_DIR
+from aegis.evals.cases import load_cases as load_eval_case_specs
 from aegis.platform import (
     collect_platform_overview,
     load_eval_metrics_with_health,
@@ -136,11 +138,25 @@ tr:last-child td{border-bottom:none}
   border:1px solid #58a6ff44;border-radius:6px;background:#0d0d0d66;padding:8px}
 .walkthrough-section-packet .walkthrough-data-row span:first-child{font-size:11px}
 .walkthrough-section-packet .walkthrough-data-row strong{font-size:15px}
+.walkthrough-context{display:grid;gap:8px;margin-top:12px;border-top:1px solid #58a6ff44;
+  padding-top:10px}
+.walkthrough-context-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;
+  border:1px solid #58a6ff33;border-radius:6px;background:#0d0d0d80;padding:8px}
+.walkthrough-context-row span{font-size:11px;color:var(--sanitize);font-weight:800;
+  text-transform:uppercase}
+.walkthrough-context-row strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px;color:var(--fg);overflow-wrap:anywhere}
+.walkthrough-values-label{margin-top:10px;font-size:11px;color:var(--muted);font-weight:800;
+  text-transform:uppercase}
+.walkthrough-section-packet .walkthrough-context{grid-template-columns:1fr 1fr}
+.walkthrough-section-packet .walkthrough-context-row{grid-template-columns:1fr;gap:3px}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
 @keyframes packetTravel{0%{transform:translateX(-110%)}100%{transform:translateX(240%)}}
 @keyframes packetArrive{from{transform:translateY(-6px);opacity:0}to{transform:translateY(0);opacity:1}}
 @media (prefers-reduced-motion: reduce){.dashboard-section.walkthrough-active{outline-offset:4px}}
-@media (max-width:640px){.walkthrough-steps{grid-template-columns:1fr}}
+@media (max-width:760px){
+  .walkthrough-steps,.walkthrough-section-packet .walkthrough-context{grid-template-columns:1fr}
+}
 """
 
 _WALKTHROUGH_STEPS = [
@@ -481,6 +497,62 @@ def _packet_field(label: str, value: Any) -> dict[str, str]:
     return {"label": label, "value": str(value)}
 
 
+def _preview(value: Any, limit: int = 180) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def _compact_json(value: Any, limit: int = 180) -> str:
+    try:
+        text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = str(value)
+    return _preview(text, limit)
+
+
+def _case_input_preview(case: dict[str, Any]) -> str:
+    if case.get("input_preview"):
+        return _preview(case["input_preview"])
+    steps = case.get("steps", [])
+    first = steps[0] if steps and isinstance(steps[0], dict) else {}
+    if first.get("input_preview"):
+        return _preview(first["input_preview"])
+    return _preview(case.get("title") or case.get("id") or "No eval input available.")
+
+
+def _eval_step_input_preview(step: Any) -> str:
+    guard = getattr(step, "guard", "guard")
+    tool_name = getattr(step, "tool_name", None)
+    arguments = getattr(step, "arguments", None)
+    text = getattr(step, "text", "")
+    encode = getattr(step, "encode", None)
+    prefix = f"{guard}"
+    if tool_name:
+        prefix = f"{prefix} {tool_name}"
+    if arguments:
+        return _preview(f"{prefix} args={_compact_json(arguments)}")
+    if text:
+        suffix = f" ({encode})" if encode else ""
+        return _preview(f"{prefix}{suffix}: {text}")
+    return _preview(prefix)
+
+
+def _eval_case_input_index(cases_dir: Path | str = DEFAULT_CASES_DIR) -> dict[str, dict[str, str]]:
+    try:
+        specs = load_eval_case_specs(cases_dir)
+    except (FileNotFoundError, OSError, ValueError, KeyError):
+        return {}
+
+    indexed = {}
+    for case in specs:
+        first_step = case.steps[0] if case.steps else None
+        indexed[case.id] = {
+            "title": case.title,
+            "input_preview": _eval_step_input_preview(first_step) if first_step else case.title,
+        }
+    return indexed
+
+
 def _top_mapping_item(values: Any) -> tuple[str, str]:
     if not isinstance(values, dict) or not values:
         return "none", "0"
@@ -526,11 +598,18 @@ def _walkthrough_steps(
     protected_blocks = sum(1 for c in attacks if c.get("worst_action") == "BLOCK")
     freshness = str(snapshot.get("freshness", "live"))
     cache_age = _num(snapshot.get("cache_age_seconds"))
-    freshness_value = freshness if freshness in ("live", "static") else f"{freshness} ({cache_age:.0f}s)"
+    freshness_value = (
+        freshness if freshness in ("live", "static") else f"{freshness} ({cache_age:.0f}s)"
+    )
+    eval_case = next((c for c in attacks if c.get("baseline_leaked")), attacks[0] if attacks else {})
+    eval_input = _case_input_preview(eval_case) if eval_case else "No eval case input available."
+    latest_summary = _preview(latest_decision.get("summary") or "No recent guarded input.")
 
     payloads = {
         "evidence-health": {
             "source": "snapshot + health",
+            "prompt": "No user prompt; this step reads the current evidence snapshot.",
+            "data": "platform.overview.snapshot + platform.overview.health",
             "fields": [
                 _packet_field("status", health.get("status", "healthy")),
                 _packet_field("freshness", freshness_value),
@@ -539,6 +618,8 @@ def _walkthrough_steps(
         },
         "investigate": {
             "source": "api drilldowns",
+            "prompt": "Operator query links; choose a session/action/phase/detector to inspect.",
+            "data": "/api/platform/{decisions,sessions,detectors,canaries,cift}",
             "fields": [
                 _packet_field("sessions", len(sessions)),
                 _packet_field("top action", f"{action_name} ({action_count})"),
@@ -547,6 +628,8 @@ def _walkthrough_steps(
         },
         "platform-cockpit": {
             "source": "runtime + stores",
+            "prompt": "No LLM prompt; this step summarizes runtime and evidence store state.",
+            "data": "overview.status + overview.canaries + overview.cift + overview.sessions",
             "fields": [
                 _packet_field("provider", status.get("provider", "unknown")),
                 _packet_field("canaries", canaries.get("total", 0)),
@@ -558,6 +641,8 @@ def _walkthrough_steps(
         },
         "nimbus-rankings": {
             "source": "session risk",
+            "prompt": f"Latest guarded input: {latest_summary}",
+            "data": "overview.sessions sorted by nimbus_cumulative_score",
             "fields": [
                 _packet_field("top session", top_session.get("session_id", "none")),
                 _packet_field("nimbus", f"{_num(top_session.get('nimbus_cumulative_score')):.2f}"),
@@ -566,6 +651,8 @@ def _walkthrough_steps(
         },
         "recent-decisions": {
             "source": "trace events",
+            "prompt": f"Latest guarded input: {latest_summary}",
+            "data": "overview.decisions.recent from trace input_summary + policy_decision",
             "fields": [
                 _packet_field("total", decisions.get("total", len(recent))),
                 _packet_field("latest", latest_decision.get("action", "none")),
@@ -574,6 +661,8 @@ def _walkthrough_steps(
         },
         "eval-summary": {
             "source": f"evals.{headline}",
+            "prompt": f"Scripted eval input sample: {eval_input}",
+            "data": f"evals/reports/metrics.json[{headline}]",
             "fields": [
                 _packet_field(
                     "detection", f"{_num(metrics.get('attack_detection_rate')):.0%}"
@@ -584,6 +673,8 @@ def _walkthrough_steps(
         },
         "success-criteria": {
             "source": "eval gates",
+            "prompt": f"Eval gate checks run against: {eval_input}",
+            "data": f"metrics.success_criteria for policy mode {headline}",
             "fields": [
                 _packet_field("passing", f"{passing_criteria}/{len(criteria)}"),
                 _packet_field("mode", headline),
@@ -592,6 +683,8 @@ def _walkthrough_steps(
         },
         "baseline-vs-protected": {
             "source": "eval cases",
+            "prompt": f"Baseline/protected input: {eval_input}",
+            "data": "evals/cases/*.yaml joined with evals/reports/results.jsonl outcomes",
             "fields": [
                 _packet_field("cases", len(attacks)),
                 _packet_field("baseline", f"{baseline_leaks} leaks"),
@@ -600,6 +693,8 @@ def _walkthrough_steps(
         },
         "detector-hit-distribution": {
             "source": "detector metrics",
+            "prompt": f"Detector inputs include eval prompt/tool payloads such as: {eval_input}",
+            "data": f"metrics.detector_hit_distribution for {headline}",
             "fields": [
                 _packet_field("top hit", eval_detector_name),
                 _packet_field("count", eval_detector_count),
@@ -614,6 +709,8 @@ def _walkthrough_steps(
             "title": title,
             "copy": copy,
             "source": payloads.get(key, {}).get("source", "platform.overview"),
+            "prompt": payloads.get(key, {}).get("prompt", "No prompt available."),
+            "data": payloads.get(key, {}).get("data", "platform.overview"),
             "fields": payloads.get(key, {}).get("fields", []),
         }
         for key, title, copy in _WALKTHROUGH_STEPS
@@ -646,6 +743,7 @@ def _walkthrough_script(
   const packet = panel.querySelector(".walkthrough-packet");
   const packetSource = panel.querySelector(".walkthrough-source");
   const packetTarget = panel.querySelector(".walkthrough-target");
+  const packetContext = panel.querySelector(".walkthrough-context");
   const packetData = panel.querySelector(".walkthrough-data");
   let timer = null;
   let refreshTimer = null;
@@ -694,11 +792,31 @@ def _walkthrough_script(
     }});
   }}
 
+  function renderContext(container, step = null) {{
+    if (!container) return;
+    container.innerHTML = "";
+    const rows = [
+      ["Prompt/input", step ? step.prompt : "Click Run walkthrough to see the active input."],
+      ["Data query", step ? step.data : "platform.overview"],
+    ];
+    rows.forEach(([labelText, valueText]) => {{
+      const row = document.createElement("div");
+      const label = document.createElement("span");
+      const value = document.createElement("strong");
+      row.className = "walkthrough-context-row";
+      label.textContent = labelText;
+      value.textContent = valueText || "none";
+      row.append(label, value);
+      container.appendChild(row);
+    }});
+  }}
+
   function renderPacket(step = null) {{
     if (!packet) return;
     const fields = step && Array.isArray(step.fields) ? step.fields : [];
     if (packetSource) packetSource.textContent = step ? step.source : "platform.overview";
     if (packetTarget) packetTarget.textContent = step ? step.key : "ready";
+    renderContext(packetContext, step);
     renderDataRows(packetData, fields);
   }}
 
@@ -712,6 +830,8 @@ def _walkthrough_script(
     const dot = document.createElement("span");
     const line = document.createElement("span");
     const target = document.createElement("span");
+    const context = document.createElement("div");
+    const valuesLabel = document.createElement("div");
     const data = document.createElement("div");
     inlinePacket.className = "walkthrough-section-packet";
     inlinePacket.setAttribute("aria-label", "Active section evidence packet");
@@ -726,11 +846,15 @@ def _walkthrough_script(
     line.setAttribute("aria-hidden", "true");
     target.className = "walkthrough-target";
     target.textContent = step.key;
+    context.className = "walkthrough-context";
+    valuesLabel.className = "walkthrough-values-label";
+    valuesLabel.textContent = "Values";
     data.className = "walkthrough-data";
     head.append(label, source);
     flow.append(dot, line, target);
+    renderContext(context, step);
     renderDataRows(data, fields);
-    inlinePacket.append(head, flow, data);
+    inlinePacket.append(head, flow, context, valuesLabel, data);
     const sectionLabel = section.querySelector(".label");
     if (sectionLabel) {{
       sectionLabel.insertAdjacentElement("afterend", inlinePacket);
@@ -869,6 +993,8 @@ def render_html(
       <span class="packet-line" aria-hidden="true"></span>
       <span class="walkthrough-target">ready</span>
     </div>
+    <div class="walkthrough-context"></div>
+    <div class="walkthrough-values-label">Values</div>
     <div class="walkthrough-data"></div>
   </div>
   <div class="walkthrough-steps" aria-label="Walkthrough steps"></div>
@@ -931,6 +1057,7 @@ def load_cases(reports_dir: Path | str, headline: str = "balanced") -> list[dict
     if not path.exists():
         return []
     cases = []
+    case_inputs = _eval_case_input_index()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
@@ -946,6 +1073,8 @@ def load_cases(reports_dir: Path | str, headline: str = "balanced") -> list[dict
         if not isinstance(row, dict):
             continue
         if row.get("mode") == headline:
+            if row.get("id") in case_inputs:
+                row = {**case_inputs[row["id"]], **row}
             cases.append(row)
     return cases
 

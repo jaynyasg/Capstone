@@ -417,9 +417,10 @@ LLM, Braintrust, and the trained ML probe are exercised on demand, never on the 
 
 The deployed dashboard includes a **Run walkthrough** button that pauses live refresh,
 scrolls through each operator section, and shows a step-by-step progress rail plus a
-large evidence packet attached to the active section. For CI-style evidence, there is also
-an opt-in Playwright smoke test that opens a rendered dashboard and captures one
-screenshot per operator section.
+large evidence packet attached to the active section. Each packet calls out the active
+prompt/input or operator query, the platform data source being read, and the values
+produced for that step. For CI-style evidence, there is also an opt-in Playwright smoke
+test that opens a rendered dashboard and captures one screenshot per operator section.
 
 ```bash
 uv run --extra visual playwright install chromium
