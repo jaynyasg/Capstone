@@ -12,11 +12,25 @@ import json
 from pathlib import Path
 
 from aegis import PolicyMode, Settings
+from aegis.platform import importers
 from aegis.platform.evidence import collect_platform_overview
 from aegis.platform.importers import import_cift_jsonl, import_trace_events
 from aegis.platform.sqlite_store import SqliteEvidenceStore, build_overview_from_store
 from aegis.platform.store import EvidenceQuery, HealthStatus
 from tests.conftest import FAKE_GITHUB_PAT
+
+
+def _count_loader(monkeypatch) -> dict:
+    """Wrap importers.load_jsonl_with_health with a call counter (the per-request re-read)."""
+    calls = {"n": 0}
+    real = importers.load_jsonl_with_health
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(importers, "load_jsonl_with_health", counting)
+    return calls
 
 
 def _event(
@@ -76,6 +90,33 @@ def test_repeated_import_does_not_duplicate_rows(tmp_path) -> None:
     import_trace_events(store, traces)
     import_trace_events(store, traces)  # same artifact, second pass
     assert store.decisions().total == 5
+
+
+def test_unchanged_source_skips_reimport(tmp_path, monkeypatch) -> None:
+    traces = tmp_path / "traces"
+    _write_trace(traces, [_event(i) for i in range(3)])
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    calls = _count_loader(monkeypatch)
+
+    import_trace_events(store, traces)  # first import reads the corpus
+    import_trace_events(store, traces)  # unchanged source -> must skip the re-read/parse
+
+    assert calls["n"] == 1  # the second import did not re-read the corpus
+    assert store.decisions().total == 3  # data from the first import is intact
+
+
+def test_changed_source_triggers_reimport(tmp_path, monkeypatch) -> None:
+    traces = tmp_path / "traces"
+    _write_trace(traces, [_event(0)])
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    calls = _count_loader(monkeypatch)
+
+    import_trace_events(store, traces)  # reads (1)
+    _write_trace(traces, [_event(1)], name="s2.jsonl")  # new file -> source changed
+    import_trace_events(store, traces)  # changed source -> re-reads (2)
+
+    assert calls["n"] == 2
+    assert store.decisions().total == 2  # the appended evidence was picked up
 
 
 def test_corrupt_line_warns_but_imports_valid_rows(tmp_path) -> None:

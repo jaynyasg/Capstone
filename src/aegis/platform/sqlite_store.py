@@ -130,6 +130,10 @@ class SqliteEvidenceStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # In-process import gate: source_path -> signature at its last import. Lets importers
+        # skip re-reading an unchanged corpus within a running process. It is a memoisation
+        # cache, not durable state — a restart re-imports once (cheap, idempotent upserts).
+        self._import_signatures: dict[str, str] = {}
         try:
             self._init_schema()
         except sqlite3.DatabaseError:
@@ -286,6 +290,13 @@ class SqliteEvidenceStore:
                      row_count=excluded.row_count""",
                 (source_kind, source_path, time.time(), row_count),
             )
+
+    def import_signature(self, source_path: str) -> str | None:
+        """The source's change-signature at its last in-process import, or None if never seen."""
+        return self._import_signatures.get(source_path)
+
+    def set_import_signature(self, source_path: str, signature: str) -> None:
+        self._import_signatures[source_path] = signature
 
     # ----- bounded reads -------------------------------------------------
 
