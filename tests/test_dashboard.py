@@ -80,6 +80,20 @@ SAMPLE_PLATFORM = {
             "last_seen": 1.0,
             "nimbus_cumulative_score": 1.0,
             "latest_action": "BLOCK",
+        },
+        {
+            "session_id": "calm",
+            "events": 4,
+            "last_seen": 10.0,
+            "nimbus_cumulative_score": 0.1,
+            "latest_action": "ALLOW",
+        },
+        {
+            "session_id": "risky",
+            "events": 5,
+            "last_seen": 3.0,
+            "nimbus_cumulative_score": 1.4,
+            "latest_action": "ESCALATE",
         }
     ],
     "evidence_paths": {"traces": ".aegis/traces", "evals": "evals/reports"},
@@ -117,6 +131,18 @@ def test_renders_platform_cockpit_from_contract() -> None:
     assert "CIFT certificates" in h
     assert "github-ghp" in h
     assert "s1" in h
+
+
+def test_renders_nimbus_rankings_sorted_by_score() -> None:
+    h = render_html(SAMPLE_PLATFORM, cases=SAMPLE_CASES)
+    section = h.split("Nimbus rankings</div>", 1)[1].split(
+        '<div class="label">Recent decisions</div>', 1
+    )[0]
+
+    assert "Nimbus rankings" in h
+    assert "#1" in section
+    assert "1.40" in section
+    assert section.index("risky") < section.index("s1") < section.index("calm")
 
 
 def test_health_warnings_render_with_source() -> None:

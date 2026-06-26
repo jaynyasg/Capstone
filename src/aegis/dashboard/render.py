@@ -81,6 +81,8 @@ tr:last-child td{border-bottom:none}
 .sev.error{color:var(--block);background:#f8514922}
 .sev.warning{color:var(--warn);background:#d2992222}
 .sev.info{color:var(--muted);background:#8a8a8a22}
+.rank{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.score{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:600}
 """
 
 _ACTION_COLOR = {
@@ -353,6 +355,39 @@ def _platform(data: dict[str, Any]) -> str:
 """
 
 
+def _nimbus_rankings(data: dict[str, Any]) -> str:
+    sessions = sorted(
+        (dict(s) for s in data.get("sessions", [])),
+        key=lambda s: (
+            _num(s.get("nimbus_cumulative_score")),
+            _num(s.get("last_seen")),
+        ),
+        reverse=True,
+    )
+    if not sessions:
+        return _note("No Nimbus session risk yet.")
+
+    rows = []
+    for idx, session in enumerate(sessions[:10], start=1):
+        action = str(session.get("latest_action", "ALLOW"))
+        score = f"{_num(session.get('nimbus_cumulative_score')):.2f}"
+        rows.append(
+            "<tr>"
+            f"<td class='rank'>#{idx}</td>"
+            f"<td class='mono'>{_esc(session.get('session_id', 'unknown'))}</td>"
+            f"<td><span class='score'>{_esc(score)}</span></td>"
+            f"<td>{_action_pill(action)}</td>"
+            f"<td>{_esc(session.get('events', 0))}</td>"
+            f"<td class='mono'>{_esc(session.get('last_seen', 0.0))}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>Rank</th><th>Session</th><th>Nimbus</th>"
+        "<th>Latest action</th><th>Events</th><th>Last seen</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
 def render_html(
     platform: Any | None,
     *,
@@ -396,6 +431,9 @@ def render_html(
 
 <div class="label">Platform cockpit</div>
 {_platform(data)}
+
+<div class="label">Nimbus rankings</div>
+{_nimbus_rankings(data)}
 
 <div class="label">Recent decisions</div>
 {_decisions(decisions, health)}
