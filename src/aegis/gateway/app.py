@@ -234,10 +234,12 @@ def create_app(
         return {"decisions": load_recent_decisions(settings.traces_dir, limit)}
 
     @app.get("/api/platform/overview")
-    def platform_overview(
-        limit: int = 25, offset: int = 0, session_id: str | None = None
-    ) -> dict[str, Any]:
-        query = _query(limit=limit, offset=offset, session_id=session_id)
+    def platform_overview(limit: int = 25) -> dict[str, Any]:
+        # The overview is the global cockpit; per-session/action/phase filtering is a drilldown
+        # concern (e.g. /api/platform/decisions?session_id=…), so the overview takes no filter
+        # params. That keeps it internally consistent — total always equals the sum of each
+        # breakdown — and lets the default shape be served from the cache.
+        query = _query(limit=limit)
         # Only the unfiltered default shape is cacheable; pydantic value-equality tracks new
         # query fields automatically (a hand-rolled field list would silently go stale).
         if query == EvidenceQuery():

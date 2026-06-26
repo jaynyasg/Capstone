@@ -50,6 +50,24 @@ def test_overview_response_is_versioned_and_truthful(tmp_path) -> None:
     assert body["health"]["status"] in {"healthy", "degraded"}
 
 
+def test_overview_is_globally_consistent_and_ignores_session_filter(tmp_path) -> None:
+    c = _client(tmp_path)
+    # Two sessions with different actions: a session-scoped total would diverge from the global
+    # breakdowns, which is exactly the inconsistency (total != sum(by_action)) this guards.
+    c.post("/guard/response", json={"session_id": "s1", "output": "all clear"})  # ALLOW on s1
+    plant = c.post("/canaries/plant", json={"session_id": "s2", "service": "github"}).json()
+    c.post("/guard/response", json={"session_id": "s2", "output": f"leak {plant['token']}"})  # s2
+
+    body = c.get("/api/platform/overview", params={"session_id": "s1"}).json()
+    decisions = body["decisions"]
+    # The overview is the global cockpit; filtering is a drilldown concern, so session_id is
+    # ignored and the overview stays internally consistent (total == sum of each breakdown).
+    assert body["query"]["session_id"] is None
+    assert decisions["total"] == sum(decisions["by_action"].values())
+    assert decisions["total"] == sum(decisions["by_phase"].values())
+    assert decisions["total"] >= 2  # both sessions counted (global, not scoped to s1)
+
+
 def test_excessive_and_negative_limits_clamp_consistently(tmp_path) -> None:
     c = _client(tmp_path)
     _seed_block(c)
@@ -154,6 +172,8 @@ def test_overview_snapshot_is_cached_within_window(tmp_path) -> None:
     assert first["snapshot"]["freshness"] == "live"
     assert second["snapshot"]["freshness"] == "cached"
 
-    # A filtered overview bypasses the cache and is freshly built.
-    filtered = c.get("/api/platform/overview", params={"session_id": "s1"}).json()
-    assert filtered["snapshot"]["freshness"] == "live"
+    # The overview takes no filter params: a stray session_id is ignored, so the request is
+    # still served from the same cached global snapshot (filtering is a drilldown concern).
+    ignored_filter = c.get("/api/platform/overview", params={"session_id": "s1"}).json()
+    assert ignored_filter["snapshot"]["freshness"] == "cached"
+    assert ignored_filter["snapshot"]["generated_at"] == first["snapshot"]["generated_at"]
