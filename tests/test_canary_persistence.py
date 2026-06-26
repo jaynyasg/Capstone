@@ -211,6 +211,55 @@ def test_detection_advances_lifecycle_to_detected(tmp_path) -> None:
     assert record["lifecycle_state"] == "detected"
 
 
+def test_canary_stored_without_key_is_skipped_not_corrupt_on_restore(tmp_path) -> None:
+    db = tmp_path / "vault.db"
+    # Plant while NO key is configured: the token is never encrypted (token_cipher is NULL),
+    # only safe metadata is stored.
+    _store(CanaryVault(db, None), "c0", "tok")
+
+    # Reopen WITH a valid key: a NULL-cipher row has no token to decrypt, so it is skipped
+    # cleanly — that is not corruption and must not raise a CORRUPT_ROW warning.
+    keyed = CanaryVault(db, Fernet.generate_key().decode())
+    assert keyed.restore() == []  # nothing to restore (no ciphertext was ever stored)
+    corrupt = [w for w in keyed.health_warnings() if w.warning_type is WarningType.CORRUPT_ROW]
+    assert corrupt == []
+
+
+def test_mark_expired_advances_lifecycle(tmp_path) -> None:
+    db = tmp_path / "vault.db"
+    vault = CanaryVault(db, Fernet.generate_key().decode())
+    _store(vault, "c0", "tok")
+
+    vault.mark_expired("c0")
+    [rec] = vault.safe_records()
+    assert rec["lifecycle_state"] == "expired"
+
+
+def test_mark_detected_canaries_with_empty_evidence_is_safe_no_op(tmp_path) -> None:
+    from aegis.contracts import DetectorResult
+
+    client = AegisClient(settings=_settings(tmp_path, Fernet.generate_key().decode()))
+    plant = client.plant_canary("github", session_id="s1")
+
+    # A honeytoken hit carrying no canary_id (empty evidence), and an empty results list, must
+    # both be safe no-ops: no crash and no lifecycle advance.
+    client._mark_detected_canaries([])
+    client._mark_detected_canaries(
+        [
+            DetectorResult(
+                detector_name="honeytoken_detector",
+                score=1.0,
+                confidence=1.0,
+                recommended_action=Action.BLOCK,
+                evidence={},
+            )
+        ]
+    )
+
+    [rec] = [r for r in client.registry.safe_records("s1") if r["canary_id"] == plant.canary_id]
+    assert rec["lifecycle_state"] == "planted"  # unchanged — nothing was marked detected
+
+
 def test_corrupt_vault_db_degrades_without_crashing_guard_path(tmp_path) -> None:
     key = Fernet.generate_key().decode()
     settings = _settings(tmp_path, key)

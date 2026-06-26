@@ -144,6 +144,33 @@ def test_cached_read_keeps_health_warnings() -> None:
     assert len(cached.health.warnings) == 1
 
 
+def test_invalidate_forces_next_read_to_rebuild() -> None:
+    clock = _Clock()
+    builder, state = _counting_builder()
+    # Huge refresh window so a rebuild can only come from invalidate(), not from ageing out.
+    cache = SnapshotCache(
+        builder, refresh_interval=1000.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
+    cache.get()  # build 1
+    cache.get()  # within window -> cached, no rebuild
+    assert state["calls"] == 1
+
+    cache.invalidate()
+    cache.get()  # cache cleared -> rebuild
+    assert state["calls"] == 2
+
+
+def test_negative_refresh_interval_normalises_to_zero() -> None:
+    clock = _Clock()
+    builder, state = _counting_builder()
+    cache = SnapshotCache(
+        builder, refresh_interval=-5.0, stale_after=60.0, clock=clock, wall_clock=clock
+    )
+    cache.get()
+    cache.get()
+    assert state["calls"] == 2  # clamped to 0 -> every read rebuilds (deterministic)
+
+
 def test_disabled_cache_rebuilds_every_read() -> None:
     clock = _Clock()
     builder, state = _counting_builder()

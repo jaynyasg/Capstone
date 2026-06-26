@@ -118,6 +118,20 @@ def test_drilldown_survives_transient_import_lock(tmp_path, monkeypatch) -> None
     assert resp.json()["total"] >= 1
 
 
+def test_decisions_offset_paginates_distinct_pages_at_api(tmp_path) -> None:
+    c = _client(tmp_path)
+    for i in range(5):
+        c.post("/guard/response", json={"session_id": "s1", "output": f"hello {i}"})
+
+    page1 = c.get("/api/platform/decisions", params={"limit": 2, "offset": 0}).json()
+    page2 = c.get("/api/platform/decisions", params={"limit": 2, "offset": 2}).json()
+    assert page1["total"] == page2["total"] >= 5  # total is stable across pages
+    ids1 = {r["event_id"] for r in page1["latest"]}
+    ids2 = {r["event_id"] for r in page2["latest"]}
+    assert len(ids1) == 2 and len(ids2) == 2
+    assert ids1.isdisjoint(ids2)  # offset yields a distinct, non-overlapping page
+
+
 def test_export_json_and_markdown_share_scope_and_redact(tmp_path) -> None:
     c = _client(tmp_path)
     plant = _seed_block(c)

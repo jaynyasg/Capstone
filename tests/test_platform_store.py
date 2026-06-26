@@ -316,3 +316,89 @@ def test_store_session_nimbus_uses_max_not_trailing_event(tmp_path) -> None:
     assert session["events"] == 3
     assert session["latest_action"] == "ALLOW"  # newest event's action (event 3)
     assert session["nimbus_cumulative_score"] == 1.4  # MAX over session, not the trailing 0
+
+
+def test_store_filters_by_since_and_until(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    _write_trace(traces, [_event(i, created=float(i)) for i in range(5)])  # created_at 0..4
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    import_trace_events(store, traces)
+
+    assert store.decisions(EvidenceQuery(since=2.0)).total == 3  # created 2,3,4
+    assert store.decisions(EvidenceQuery(until=2.0)).total == 3  # created 0,1,2
+    window = store.decisions(EvidenceQuery(since=1.0, until=3.0))
+    assert window.total == 3  # created 1,2,3
+    assert all(1.0 <= r["created_at"] <= 3.0 for r in window.latest)
+
+
+def test_store_filters_by_detector_subquery(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    _write_trace(
+        traces,
+        [
+            _event(
+                1,
+                action="BLOCK",
+                detectors=[
+                    {"detector_name": "secret_pattern_scanner", "recommended_action": "BLOCK"}
+                ],
+            ),
+            _event(
+                2,
+                action="BLOCK",
+                detectors=[
+                    {"detector_name": "tool_call_argument_scanner", "recommended_action": "BLOCK"}
+                ],
+            ),
+            _event(3, action="ALLOW", detectors=[]),
+        ],
+    )
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    import_trace_events(store, traces)
+
+    window = store.decisions(EvidenceQuery(detector="secret_pattern_scanner"))
+    assert window.total == 1  # only the event whose fired detector matches
+    assert window.latest[0]["event_id"] == "evt_1"
+
+
+def test_store_filters_cift_by_model_id(tmp_path) -> None:
+    cift = tmp_path / "cift" / "certifications.jsonl"
+    cift.parent.mkdir(parents=True)
+    rows = [
+        {"certification_id": "c1", "created_at": 1.0, "model_id": "llama-local", "status": "PASS"},
+        {"certification_id": "c2", "created_at": 2.0, "model_id": "gpt-4o-mini", "status": "PASS"},
+    ]
+    cift.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    import_cift_jsonl(store, cift)
+
+    window = store.cift(EvidenceQuery(model_id="llama-local"))
+    assert window.total == 1
+    assert window.latest[0]["model_id"] == "llama-local"
+
+
+def test_store_offset_paginates_distinct_windows(tmp_path) -> None:
+    traces = tmp_path / "traces"
+    _write_trace(traces, [_event(i, created=float(i)) for i in range(5)])  # created_at 0..4
+    store = SqliteEvidenceStore(tmp_path / "platform" / "evidence.db")
+    import_trace_events(store, traces)
+
+    page1 = store.decisions(EvidenceQuery(limit=2, offset=0))
+    page2 = store.decisions(EvidenceQuery(limit=2, offset=2))
+    assert page1.total == 5 and page2.total == 5  # total is unaffected by paging
+    assert [r["created_at"] for r in page1.latest] == [4.0, 3.0]  # newest first
+    assert [r["created_at"] for r in page2.latest] == [2.0, 1.0]  # next page, no overlap
+
+
+def test_corrupt_evidence_db_is_recreated_and_usable(tmp_path) -> None:
+    db = tmp_path / "platform" / "evidence.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"this is not a valid sqlite database at all")
+
+    store = SqliteEvidenceStore(db)  # rebuildable cache: recreate rather than crash
+    assert store.decisions().total == 0  # usable empty store
+
+    traces = tmp_path / "traces"
+    _write_trace(traces, [_event(1)])
+    import_trace_events(store, traces)
+    assert store.decisions().total == 1  # imports and reads normally after recreation
