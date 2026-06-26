@@ -448,7 +448,9 @@ scenario, prompt/input or operator query, platform data source, and values produ
 step. Each step also runs the sample prompt through the live guard endpoint with the selected
 policy mode and includes a link that opens the same prompt prefilled in the Test Console.
 Detector evidence is split into a saved **Eval detector hit distribution** and a per-run
-**Live walkthrough detector hits** chart that increments from those live guard responses.
+**Live walkthrough detector hits** chart that increments from those live guard responses. At
+the end of the run, the bottom **Walkthrough run summary** lists each section in order with
+its purpose, data source/query, prompt, action, risk, detectors, and highlighted values.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 

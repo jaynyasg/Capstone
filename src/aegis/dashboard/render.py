@@ -175,6 +175,22 @@ tr:last-child td{border-bottom:none}
 .walkthrough-live-result.block{color:var(--block)}
 .walkthrough-section-packet .walkthrough-context{grid-template-columns:1fr 1fr}
 .walkthrough-section-packet .walkthrough-context-row{grid-template-columns:1fr;gap:3px}
+.walkthrough-run-summary{display:grid;gap:14px}
+.walkthrough-summary-head{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+  gap:8px;border-bottom:1px solid var(--border);padding-bottom:12px}
+.walkthrough-summary-field{border:1px solid var(--border);border-radius:6px;background:#111;padding:9px}
+.walkthrough-summary-field span{display:block;font-size:11px;color:var(--muted);font-weight:800;
+  text-transform:uppercase}
+.walkthrough-summary-field strong{display:block;margin-top:3px;color:var(--fg);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
+.walkthrough-summary-step{border:1px solid var(--border);border-radius:8px;background:#0f0f0f;padding:12px}
+.walkthrough-summary-step h3{font-size:14px;margin-bottom:8px}
+.walkthrough-summary-step .walkthrough-data{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.walkthrough-summary-step .walkthrough-data-row{grid-template-columns:1fr;gap:2px;
+  border:1px solid #58a6ff33;border-radius:6px;background:#0d0d0d;padding:7px}
+.walkthrough-summary-prompt{margin-top:8px;border:1px solid #d2992255;border-radius:6px;
+  background:#2b210a;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
 @keyframes packetTravel{0%{transform:translateX(-110%)}100%{transform:translateX(240%)}}
 @keyframes packetArrive{from{transform:translateY(-6px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -845,12 +861,17 @@ def _walkthrough_script(
   const packetSample = panel.querySelector(".walkthrough-sample");
   const packetData = panel.querySelector(".walkthrough-data");
   const liveDetectorChart = document.getElementById("walkthrough-live-detectors");
+  const runSummary = document.getElementById("walkthrough-run-summary");
   let timer = null;
   let refreshTimer = null;
   let liveDetectorResponses = 0;
   const liveDetectorCounts = new Map();
   let selectedPolicyMode = initialPolicyMode;
   let fallbackSampleIndex = 0;
+  let currentRunId = 0;
+  let runStartedAt = null;
+  let summaryReady = false;
+  const stepResults = new Map();
   let activeSample = walkthroughSamples[0] || {{
     label: "Sample",
     mode: "response",
@@ -1119,13 +1140,139 @@ def _walkthrough_script(
     renderLiveDetectorChart();
   }}
 
-  let testSerial = 0;
-  async function runGuardTest(step) {{
+  function resetRunSummary() {{
+    summaryReady = false;
+    stepResults.clear();
+    if (!runSummary) return;
+    runSummary.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Walkthrough is running. The step-by-step summary will appear here when the run finishes.";
+    runSummary.appendChild(empty);
+  }}
+
+  function recordStepStatus(step, status, detail = "") {{
+    stepResults.set(step.key, {{
+      status,
+      detail,
+      recordedAt: new Date().toLocaleTimeString(),
+      policyMode: policyModeLabel(selectedPolicyMode),
+      guardCall: guardPathForSample(activeSample || {{}}),
+      action: "",
+      risk: "",
+      detectors: "",
+    }});
+    if (summaryReady) renderRunSummary();
+  }}
+
+  function recordStepDecision(step, decision) {{
+    const action = decision.action || "UNKNOWN";
+    stepResults.set(step.key, {{
+      status: "complete",
+      detail: decision.reasons && decision.reasons.length ? decision.reasons.join("; ") : "Guard returned a decision.",
+      recordedAt: new Date().toLocaleTimeString(),
+      policyMode: policyModeLabel(selectedPolicyMode),
+      guardCall: guardPathForSample(activeSample || {{}}),
+      action,
+      risk: Number(decision.risk_score || 0).toFixed(2),
+      detectors: detectorNames(decision),
+    }});
+    if (summaryReady) renderRunSummary();
+  }}
+
+  function recordStepError(step, err) {{
+    stepResults.set(step.key, {{
+      status: "unavailable",
+      detail: err && err.message ? err.message : String(err || "unknown error"),
+      recordedAt: new Date().toLocaleTimeString(),
+      policyMode: policyModeLabel(selectedPolicyMode),
+      guardCall: guardPathForSample(activeSample || {{}}),
+      action: "unavailable",
+      risk: "n/a",
+      detectors: "n/a",
+    }});
+    if (summaryReady) renderRunSummary();
+  }}
+
+  function detectorSummaryText() {{
+    const rows = [...liveDetectorCounts.entries()].sort((a, b) => b[1] - a[1]);
+    return rows.length ? rows.map(([name, count]) => `${{name}}:${{count}}`).join(", ") : "none";
+  }}
+
+  function appendSummaryField(container, labelText, valueText) {{
+    const field = document.createElement("div");
+    const label = document.createElement("span");
+    const value = document.createElement("strong");
+    field.className = "walkthrough-summary-field";
+    label.textContent = labelText;
+    value.textContent = valueText || "none";
+    field.append(label, value);
+    container.appendChild(field);
+  }}
+
+  function renderRunSummary() {{
+    if (!runSummary) return;
+    runSummary.innerHTML = "";
+    const overview = document.createElement("div");
+    overview.className = "walkthrough-summary-head";
+    appendSummaryField(overview, "Run completed", new Date().toLocaleTimeString());
+    appendSummaryField(overview, "Started", runStartedAt || "unknown");
+    appendSummaryField(overview, "Policy mode", policyModeLabel(selectedPolicyMode));
+    appendSummaryField(overview, "Scenario", activeSample.label || "sample");
+    appendSummaryField(overview, "Guard call", guardPathForSample(activeSample || {{}}));
+    appendSummaryField(overview, "Live responses", String(liveDetectorResponses));
+    appendSummaryField(overview, "Detector hits", detectorSummaryText());
+    runSummary.appendChild(overview);
+
+    steps.forEach((step, index) => {{
+      const result = stepResults.get(step.key) || {{
+        status: "pending",
+        detail: "This step did not return a live guard result before the summary rendered.",
+        action: "pending",
+        risk: "pending",
+        detectors: "pending",
+        recordedAt: "pending",
+        policyMode: policyModeLabel(selectedPolicyMode),
+        guardCall: guardPathForSample(activeSample || {{}}),
+      }};
+      const section = document.createElement("section");
+      const heading = document.createElement("h3");
+      const values = document.createElement("div");
+      const prompt = document.createElement("div");
+      section.className = "walkthrough-summary-step";
+      heading.textContent = `Step ${{index + 1}}: ${{step.title}}`;
+      values.className = "walkthrough-data";
+      renderDataRows(values, [
+        {{ label: "section", value: step.key }},
+        {{ label: "purpose", value: step.copy }},
+        {{ label: "source", value: step.source || "platform.overview" }},
+        {{ label: "data query", value: step.data || "platform.overview" }},
+        {{ label: "policy mode", value: result.policyMode || policyModeLabel(selectedPolicyMode) }},
+        {{ label: "guard call", value: result.guardCall || guardPathForSample(activeSample || {{}}) }},
+        {{ label: "status", value: result.status }},
+        {{ label: "action", value: result.action || "pending" }},
+        {{ label: "risk", value: result.risk || "pending" }},
+        {{ label: "detectors", value: result.detectors || "pending" }},
+        {{ label: "recorded", value: result.recordedAt || "pending" }},
+        {{ label: "detail", value: result.detail || "none" }},
+        ...((Array.isArray(step.fields) ? step.fields : []).map((field) => ({{
+          label: `value: ${{field.label || "field"}}`,
+          value: field.value || "",
+        }}))),
+      ]);
+      prompt.className = "walkthrough-summary-prompt";
+      prompt.textContent = `Prompt used for this step:\\n${{activeSample.prompt || "none"}}`;
+      section.append(heading, values, prompt);
+      runSummary.appendChild(section);
+    }});
+  }}
+
+  async function runGuardTest(step, runId) {{
     const sample = activeSample || {{}};
     const scanMode = sample.mode || "response";
     const guardPath = guardPathForSample(sample);
-    const serial = ++testSerial;
     updateLiveResult(step, `Testing ${{guardPath}} in ${{policyModeLabel(selectedPolicyMode)}} mode with this prompt...`, "testing");
+    recordStepStatus(step, "testing", `Calling ${{guardPath}} with the selected sample prompt.`);
     try {{
       const response = await fetch(`/guard/${{scanMode}}`, {{
         method: "POST",
@@ -1133,11 +1280,12 @@ def _walkthrough_script(
         body: JSON.stringify(sampleBody(sample))
       }});
       const decision = await response.json();
-      if (serial !== testSerial) return;
+      if (runId !== currentRunId) return;
       if (!response.ok) {{
         throw new Error(decision.detail || `HTTP ${{response.status}}`);
       }}
       recordLiveDetectorHits(decision);
+      recordStepDecision(step, decision);
       const action = decision.action || "UNKNOWN";
       const risk = Number(decision.risk_score || 0).toFixed(2);
       updateLiveResult(
@@ -1146,7 +1294,8 @@ def _walkthrough_script(
         resultClass(action)
       );
     }} catch (err) {{
-      if (serial !== testSerial) return;
+      if (runId !== currentRunId) return;
+      recordStepError(step, err);
       updateLiveResult(
         step,
         `Live guard test unavailable here: ${{err && err.message ? err.message : err}}`,
@@ -1243,7 +1392,7 @@ def _walkthrough_script(
     renderStepList(index);
     renderPacket(step);
     attachSectionPacket(section, step);
-    runGuardTest(step);
+    runGuardTest(step, currentRunId);
     panel.classList.add("active");
     button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
     section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
@@ -1260,6 +1409,11 @@ def _walkthrough_script(
     if (note) note.textContent = "Live refresh has resumed.";
     renderStepList(steps.length);
     if (packetTarget) packetTarget.textContent = "complete";
+    summaryReady = true;
+    renderRunSummary();
+    if (runSummary) {{
+      runSummary.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "start" }});
+    }}
     window.setTimeout(() => {{
       clearActive();
       panel.classList.remove("active");
@@ -1270,6 +1424,9 @@ def _walkthrough_script(
     if (timer) window.clearInterval(timer);
     pauseRefresh();
     resetLiveDetectorChart();
+    currentRunId += 1;
+    runStartedAt = new Date().toLocaleTimeString();
+    resetRunSummary();
     activeSample = nextSampleForRun();
     button.disabled = true;
     button.textContent = "Running...";
@@ -1416,6 +1573,13 @@ def render_html(
 <section class="dashboard-section" data-section="live-walkthrough-detectors">
 <div class="label">Live walkthrough detector hits</div>
 {_live_walkthrough_distribution()}
+</section>
+
+<section class="dashboard-section" data-section="walkthrough-run-summary">
+<div class="label">Walkthrough run summary</div>
+<div id="walkthrough-run-summary" class="card walkthrough-run-summary" aria-live="polite">
+  <div class="empty">Run walkthrough to generate a step-by-step summary.</div>
+</div>
 </section>
 
 <div class="hr"></div>
