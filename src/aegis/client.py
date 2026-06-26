@@ -28,7 +28,7 @@ from aegis.detectors.nimbus import NimbusLedger
 from aegis.detectors.partial import PartialLeakDetector
 from aegis.detectors.patterns import SecretPatternScanner
 from aegis.detectors.tool_args import ToolCallArgumentScanner
-from aegis.policy.engine import PolicyEngine
+from aegis.policy.engine import PolicyEngine, PolicyMode
 from aegis.secrets.broker import CredentialBroker
 from aegis.tracing import Tracer
 
@@ -79,6 +79,7 @@ class AegisClient:
         tools: list[dict[str, Any]] | None = None,
         session_id: str = "default",
         metadata: dict[str, Any] | None = None,
+        policy_mode: PolicyMode | str | None = None,
     ) -> AegisDecision:
         text = _messages_to_text(messages)
         ctx = ScanContext(
@@ -87,7 +88,7 @@ class AegisClient:
             text=text,
             trusted_boundary=TrustBoundary.MIXED,
         )
-        return self._guard(ctx, metadata)
+        return self._guard(ctx, metadata, policy_mode)
 
     def guard_tool_call(
         self,
@@ -95,6 +96,7 @@ class AegisClient:
         arguments: dict[str, Any],
         session_id: str = "default",
         metadata: dict[str, Any] | None = None,
+        policy_mode: PolicyMode | str | None = None,
     ) -> AegisDecision:
         ctx = ScanContext(
             session_id=session_id,
@@ -104,13 +106,14 @@ class AegisClient:
             tool_arguments=arguments,
             trusted_boundary=TrustBoundary.MIXED,
         )
-        return self._guard(ctx, metadata)
+        return self._guard(ctx, metadata, policy_mode)
 
     def guard_response(
         self,
         output: str,
         session_id: str = "default",
         metadata: dict[str, Any] | None = None,
+        policy_mode: PolicyMode | str | None = None,
     ) -> AegisDecision:
         ctx = ScanContext(
             session_id=session_id,
@@ -118,7 +121,7 @@ class AegisClient:
             text=output,
             trusted_boundary=TrustBoundary.UNTRUSTED,
         )
-        return self._guard(ctx, metadata)
+        return self._guard(ctx, metadata, policy_mode)
 
     def plant_canary(
         self,
@@ -183,7 +186,13 @@ class AegisClient:
 
     # ----- pipeline ------------------------------------------------------
 
-    def _guard(self, ctx: ScanContext, metadata: dict[str, Any] | None) -> AegisDecision:
+    def _guard(
+        self,
+        ctx: ScanContext,
+        metadata: dict[str, Any] | None,
+        policy_mode: PolicyMode | str | None = None,
+    ) -> AegisDecision:
+        policy = self.policy if policy_mode is None else PolicyEngine(policy_mode)
         scan_ctx = self._scanner_context(ctx)
         results = [d.scan(scan_ctx) for d in self._content]
 
@@ -207,11 +216,11 @@ class AegisClient:
             )
 
         # Enforce.
-        decision = self.policy.decide(results)
+        decision = policy.decide(results)
         decision = _apply_broker_override(decision, assessment)
         self._mark_detected_canaries(results)
 
-        event = self._build_event(ctx, results, decision, assessment, metadata)
+        event = self._build_event(ctx, results, decision, assessment, metadata, policy.mode)
         trace_path = self.tracer.record(event)
         decision.trace_id = event.event_id
         if not decision.allowed and trace_path is not None:
@@ -225,10 +234,11 @@ class AegisClient:
         decision: AegisDecision,
         assessment,
         metadata: dict[str, Any] | None,
+        policy_mode: PolicyMode,
     ) -> AegisEvent:
         summary = self.registry.redact_text(redact_text(ctx.text))[:_SUMMARY_LIMIT]
         meta = dict(metadata or {})
-        meta["policy_mode"] = self.settings.policy_mode
+        meta["policy_mode"] = str(policy_mode)
         if assessment.critical:
             meta["critical"] = True
             meta["raw_secret_leaked_handles"] = assessment.leaked_handles

@@ -7,12 +7,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from aegis.policy.engine import PolicyMode
+
 
 class ChatRequest(BaseModel):
     session_id: str = "gateway"
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] | None = None
     model: str | None = None
+    policy_mode: PolicyMode | None = None
 
 
 class GuardRequestBody(BaseModel):
@@ -20,6 +23,7 @@ class GuardRequestBody(BaseModel):
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    policy_mode: PolicyMode | None = None
 
 
 class GuardToolBody(BaseModel):
@@ -27,12 +31,14 @@ class GuardToolBody(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     metadata: dict[str, Any] = Field(default_factory=dict)
+    policy_mode: PolicyMode | None = None
 
 
 class GuardResponseBody(BaseModel):
     session_id: str = "gateway"
     output: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    policy_mode: PolicyMode | None = None
 
 
 class PlantCanaryBody(BaseModel):

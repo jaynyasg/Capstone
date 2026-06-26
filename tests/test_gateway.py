@@ -86,6 +86,29 @@ def test_direct_guard_endpoint(tmp_path) -> None:
     assert r.json()["action"] == "BLOCK"
 
 
+def test_direct_guard_endpoint_accepts_policy_mode_override(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    observe = c.post(
+        "/guard/response",
+        json={
+            "session_id": "mode-observe",
+            "policy_mode": "observe",
+            "output": f"leak {FAKE_GITHUB_PAT}",
+        },
+    ).json()
+    balanced = c.post(
+        "/guard/response",
+        json={
+            "session_id": "mode-balanced",
+            "policy_mode": "balanced",
+            "output": f"leak {FAKE_GITHUB_PAT}",
+        },
+    ).json()
+
+    assert observe["action"] == "ALLOW"
+    assert balanced["action"] == "BLOCK"
+
+
 def test_canary_plant_endpoint_tracks_lifecycle_without_logging_token(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     r = c.post(
@@ -207,11 +230,13 @@ def test_try_console_served(tmp_path) -> None:
 
 def test_try_console_supports_walkthrough_prefill_links(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
-    r = c.get("/try?mode=tool_call&session=walkthrough&text=api_key%3Dghp_demo")
+    r = c.get("/try?mode=tool_call&policy=strict&session=walkthrough&text=api_key%3Dghp_demo")
     assert r.status_code == 200
     assert "URLSearchParams" in r.text
     assert "presetText" in r.text
+    assert "presetPolicy" in r.text
     assert "setMode(presetMode)" in r.text
+    assert "setPolicyMode(presetPolicy)" in r.text
 
 
 def test_favicon_no_content(tmp_path) -> None:

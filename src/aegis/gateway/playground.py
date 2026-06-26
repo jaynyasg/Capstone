@@ -70,6 +70,13 @@ input{background:var(--surface);color:var(--fg);border:1px solid var(--border);b
   <button data-mode="tool_call">Tool-call arg<span class="hint">guard_tool_call</span></button>
 </div>
 
+<div class="label">4 · Policy mode</div>
+<div class="seg" id="policy-modes" role="group" aria-label="policy mode">
+  <button data-policy="observe">Observe<span class="hint">detect only</span></button>
+  <button data-policy="balanced" class="active">Balanced<span class="hint">default</span></button>
+  <button data-policy="strict">Strict<span class="hint">conservative</span></button>
+</div>
+
 <div class="row" style="margin-top:16px">
   <button class="go" onclick="runTest()">Test with Aegis</button>
   <span style="flex:1"></span>
@@ -82,6 +89,7 @@ input{background:var(--surface);color:var(--fg);border:1px solid var(--border);b
 <script>
 const COLOR = {ALLOW:'var(--allow)',WARN:'var(--warn)',SANITIZE:'var(--accent)',BLOCK:'var(--block)',ESCALATE:'var(--escalate)'};
 let mode = 'response';
+let policyMode = 'balanced';
 
 document.querySelectorAll('.chip').forEach(c => c.onclick = () => { document.getElementById('msg').value = c.dataset.fill; });
 function setMode(next){
@@ -92,22 +100,32 @@ function setMode(next){
   mode = next;
 }
 document.querySelectorAll('#modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+function setPolicyMode(next){
+  if(!['observe','balanced','strict'].includes(next)) return;
+  document.querySelectorAll('#policy-modes button').forEach(x => x.classList.remove('active'));
+  const selected = document.querySelector(`#policy-modes button[data-policy="${next}"]`);
+  if(selected) selected.classList.add('active');
+  policyMode = next;
+}
+document.querySelectorAll('#policy-modes button').forEach(b => b.onclick = () => setPolicyMode(b.dataset.policy));
 
 const params = new URLSearchParams(window.location.search);
 const presetText = params.get('text') || params.get('prompt');
 const presetSession = params.get('session');
 const presetMode = params.get('mode');
+const presetPolicy = params.get('policy') || params.get('policy_mode');
 if(presetText) document.getElementById('msg').value = presetText;
 if(presetSession) document.getElementById('sess').value = presetSession;
 if(presetMode) setMode(presetMode);
+if(presetPolicy) setPolicyMode(presetPolicy);
 
 async function runTest(){
   const text = document.getElementById('msg').value;
   const session = document.getElementById('sess').value || 'playground';
   let url, body;
-  if(mode==='request'){ url='/guard/request'; body={session_id:session, messages:[{role:'user',content:text}]}; }
-  else if(mode==='tool_call'){ url='/guard/tool_call'; body={session_id:session, tool_name:'send_email', arguments:{to:'someone@example.com', body:text}}; }
-  else { url='/guard/response'; body={session_id:session, output:text}; }
+  if(mode==='request'){ url='/guard/request'; body={session_id:session, policy_mode:policyMode, messages:[{role:'user',content:text}]}; }
+  else if(mode==='tool_call'){ url='/guard/tool_call'; body={session_id:session, policy_mode:policyMode, tool_name:'send_email', arguments:{to:'someone@example.com', body:text}}; }
+  else { url='/guard/response'; body={session_id:session, policy_mode:policyMode, output:text}; }
 
   const el = document.getElementById('result');
   el.style.display='block';
@@ -128,7 +146,7 @@ function render(d){
   document.getElementById('result').innerHTML =
     '<div class="verdict"><span class="dot" style="background:'+color+'"></span>'
     + '<span style="color:'+color+'">'+esc(d.action)+'</span></div>'
-    + '<div class="meta">guard: '+esc(mode)+' · risk '+(d.risk_score??0).toFixed(2)
+    + '<div class="meta">guard: '+esc(mode)+' · policy '+esc(policyMode)+' · risk '+(d.risk_score??0).toFixed(2)
     + ' · detectors fired: '+(fired.length?esc([...new Set(fired)].join(', ')):'none')+'</div>'
     + (reasons?'<ul class="reasons">'+reasons+'</ul>':'<div class="meta" style="margin-top:10px;color:var(--allow)">allowed — no evidence</div>');
 }

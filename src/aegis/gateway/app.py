@@ -154,7 +154,9 @@ def create_app(
     @app.post("/v1/chat/completions")
     def chat(req: ChatRequest) -> dict[str, Any]:
         """Full proxy: guard request -> provider -> guard tool calls + response."""
-        request_decision = client.guard_request(req.messages, req.tools, req.session_id)
+        request_decision = client.guard_request(
+            req.messages, req.tools, req.session_id, policy_mode=req.policy_mode
+        )
         if not request_decision.allowed:
             return {
                 "session_id": req.session_id,
@@ -172,10 +174,14 @@ def create_app(
 
         tool_results = []
         for call in completion.tool_calls:
-            decision = client.guard_tool_call(call.name, call.arguments, req.session_id)
+            decision = client.guard_tool_call(
+                call.name, call.arguments, req.session_id, policy_mode=req.policy_mode
+            )
             tool_results.append((call, decision))
 
-        response_decision = client.guard_response(completion.text, req.session_id)
+        response_decision = client.guard_response(
+            completion.text, req.session_id, policy_mode=req.policy_mode
+        )
         blocked = not response_decision.allowed or any(not d.allowed for _, d in tool_results)
         output = completion.text if response_decision.allowed else _REFUSAL
 
@@ -197,18 +203,20 @@ def create_app(
     @app.post("/guard/request")
     def guard_request(body: GuardRequestBody) -> dict[str, Any]:
         return client.guard_request(
-            body.messages, body.tools, body.session_id, body.metadata
+            body.messages, body.tools, body.session_id, body.metadata, body.policy_mode
         ).model_dump()
 
     @app.post("/guard/tool_call")
     def guard_tool_call(body: GuardToolBody) -> dict[str, Any]:
         return client.guard_tool_call(
-            body.tool_name, body.arguments, body.session_id, body.metadata
+            body.tool_name, body.arguments, body.session_id, body.metadata, body.policy_mode
         ).model_dump()
 
     @app.post("/guard/response")
     def guard_response(body: GuardResponseBody) -> dict[str, Any]:
-        return client.guard_response(body.output, body.session_id, body.metadata).model_dump()
+        return client.guard_response(
+            body.output, body.session_id, body.metadata, body.policy_mode
+        ).model_dump()
 
     @app.post("/canaries/plant")
     def plant_canary(body: PlantCanaryBody) -> dict[str, Any]:

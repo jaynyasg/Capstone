@@ -248,6 +248,12 @@ appears in model-visible context.
 Set via `AEGIS_POLICY_MODE` or `policy.yaml`. Rules are independent; the engine takes the
 most severe action.
 
+The deployed dashboard and `/try` Test Console also include an **Observe / Balanced /
+Strict** selector. That selector sends `policy_mode` on the live guard request so demos can
+show the same prompt passing in `observe`, blocking in `balanced`, and tightening further in
+`strict` without restarting the service. The server's configured mode remains the default
+for normal traffic and for requests that omit `policy_mode`.
+
 ## Evaluation
 
 `uv run aegis-eval` runs 11 scripted scenarios across all 7 PRD categories (benign, encoded,
@@ -417,12 +423,14 @@ LLM, Braintrust, and the trained ML probe are exercised on demand, never on the 
 
 The deployed dashboard includes a **Run walkthrough** button that pauses live refresh,
 scrolls through each operator section, and shows a step-by-step progress rail plus a
-large evidence packet attached to the active section. Each packet calls out the active
-prompt/input or operator query, the platform data source being read, and the values
-produced for that step. Each step also runs a sample prompt through the live guard endpoint
-and includes a link that opens the same prompt prefilled in the Test Console. Detector
-evidence is split into a saved **Eval detector hit distribution** and a per-run **Live
-walkthrough detector hits** chart that increments from those live guard responses.
+large evidence packet attached to the active section. The dashboard header includes an
+**Observe / Balanced / Strict** selector; each packet calls out the selected policy mode,
+the active prompt/input or operator query, the platform data source being read, and the
+values produced for that step. Each step also runs a sample prompt through the live guard
+endpoint with the selected policy mode and includes a link that opens the same prompt
+prefilled in the Test Console. Detector evidence is split into a saved **Eval detector hit
+distribution** and a per-run **Live walkthrough detector hits** chart that increments from
+those live guard responses.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 
