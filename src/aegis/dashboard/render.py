@@ -94,9 +94,9 @@ tr:last-child td{border-bottom:none}
 .dashboard-section.walkthrough-active{outline:3px solid var(--accent);outline-offset:6px;
   background:#005ea214;box-shadow:0 0 0 9999px #00000026,0 0 32px #005ea255;color:var(--fg)}
 .dashboard-section.walkthrough-active .card,.dashboard-section.walkthrough-active table{background:#101820}
-.walkthrough-status{position:fixed;right:18px;bottom:18px;z-index:20;display:none;
-  max-width:min(360px,calc(100vw - 36px));border:1px solid var(--accent);border-radius:8px;
-  background:#0d0d0df2;box-shadow:0 12px 40px #0008;padding:12px 14px}
+.walkthrough-status{position:fixed;right:24px;bottom:24px;z-index:20;display:none;
+  max-width:min(520px,calc(100vw - 48px));border:2px solid var(--accent);border-radius:8px;
+  background:#0d0d0df7;box-shadow:0 18px 60px #000b,0 0 0 1px #58a6ff33;padding:16px}
 .walkthrough-status.active{display:block}
 .walkthrough-title{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em}
 .walkthrough-copy{font-size:13px;color:var(--fg);margin-top:4px}
@@ -106,27 +106,39 @@ tr:last-child td{border-bottom:none}
   color:var(--muted);font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .walkthrough-step.active{border-color:var(--accent);background:#005ea222;color:var(--fg)}
 .walkthrough-step.done{border-color:#2ea04366;color:var(--allow)}
-.walkthrough-packet{margin-top:10px;border:1px solid #005ea266;border-radius:8px;background:#005ea214;
-  padding:10px}
+.walkthrough-packet{margin-top:12px;border:1px solid #58a6ff99;border-radius:8px;background:#06192a;
+  box-shadow:inset 0 0 0 1px #005ea255,0 0 24px #005ea233;padding:14px}
 .walkthrough-packet-head{display:flex;justify-content:space-between;gap:10px;align-items:center;
-  font-size:11px;font-weight:800;text-transform:uppercase;color:var(--fg)}
-.walkthrough-source{font-size:11px;color:var(--sanitize);text-transform:none;text-align:right}
-.walkthrough-flow{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;margin-top:8px}
-.packet-dot{width:10px;height:10px;border-radius:999px;background:var(--sanitize);
+  font-size:12px;font-weight:800;text-transform:uppercase;color:var(--fg)}
+.walkthrough-source{font-size:12px;color:var(--sanitize);text-transform:none;text-align:right}
+.walkthrough-flow{display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:center;margin-top:10px}
+.packet-dot{width:12px;height:12px;border-radius:999px;background:var(--sanitize);
   box-shadow:0 0 16px #58a6ff99;animation:packetPulse 1.2s ease-in-out infinite}
-.packet-line{position:relative;height:2px;background:#58a6ff44;overflow:hidden}
+.packet-line{position:relative;height:3px;background:#58a6ff44;overflow:hidden}
 .packet-line:after{content:"";position:absolute;inset:0;width:42%;background:linear-gradient(90deg,transparent,var(--sanitize),transparent);
   animation:packetTravel 1.4s linear infinite}
-.walkthrough-target{font-size:11px;color:var(--muted);font-weight:700;white-space:nowrap}
+.walkthrough-target{font-size:12px;color:var(--fg);font-weight:800;white-space:nowrap}
 .walkthrough-data{display:grid;gap:5px;margin-top:9px}
-.walkthrough-data-row{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px;align-items:baseline;
-  font-size:12px}
+.walkthrough-data-row{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;align-items:baseline;
+  font-size:13px}
 .walkthrough-data-row span:first-child{color:var(--muted);font-weight:700;text-transform:uppercase}
-.walkthrough-data-row strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+.walkthrough-data-row strong{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;
   color:var(--fg);overflow-wrap:anywhere}
 .walkthrough-data-empty{font-size:12px;color:var(--muted)}
+.walkthrough-section-packet{margin:10px 0 14px;border:2px solid var(--sanitize);border-radius:8px;
+  background:#06192af2;box-shadow:0 0 0 1px #005ea255,0 12px 34px #0008,0 0 30px #58a6ff44;
+  padding:14px;animation:packetArrive 180ms ease-out}
+.walkthrough-section-packet .walkthrough-packet-head{font-size:13px}
+.walkthrough-section-packet .walkthrough-source{font-size:12px}
+.walkthrough-section-packet .walkthrough-data{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:8px;margin-top:12px}
+.walkthrough-section-packet .walkthrough-data-row{grid-template-columns:1fr;gap:2px;
+  border:1px solid #58a6ff44;border-radius:6px;background:#0d0d0d66;padding:8px}
+.walkthrough-section-packet .walkthrough-data-row span:first-child{font-size:11px}
+.walkthrough-section-packet .walkthrough-data-row strong{font-size:15px}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
 @keyframes packetTravel{0%{transform:translateX(-110%)}100%{transform:translateX(240%)}}
+@keyframes packetArrive{from{transform:translateY(-6px);opacity:0}to{transform:translateY(0);opacity:1}}
 @media (prefers-reduced-motion: reduce){.dashboard-section.walkthrough-active{outline-offset:4px}}
 @media (max-width:640px){.walkthrough-steps{grid-template-columns:1fr}}
 """
@@ -642,6 +654,9 @@ def _walkthrough_script(
     document.querySelectorAll(".walkthrough-active").forEach((el) => {{
       el.classList.remove("walkthrough-active");
     }});
+    document.querySelectorAll(".walkthrough-section-packet").forEach((el) => {{
+      el.remove();
+    }});
   }}
 
   function renderStepList(activeIndex = -1) {{
@@ -657,18 +672,14 @@ def _walkthrough_script(
     }});
   }}
 
-  function renderPacket(step = null) {{
-    if (!packet) return;
-    const fields = step && Array.isArray(step.fields) ? step.fields : [];
-    if (packetSource) packetSource.textContent = step ? step.source : "platform.overview";
-    if (packetTarget) packetTarget.textContent = step ? step.key : "ready";
-    if (!packetData) return;
-    packetData.innerHTML = "";
+  function renderDataRows(container, fields) {{
+    if (!container) return;
+    container.innerHTML = "";
     if (!fields.length) {{
       const empty = document.createElement("div");
       empty.className = "walkthrough-data-empty";
       empty.textContent = "No payload rows for this step.";
-      packetData.appendChild(empty);
+      container.appendChild(empty);
       return;
     }}
     fields.forEach((field) => {{
@@ -676,11 +687,56 @@ def _walkthrough_script(
       const label = document.createElement("span");
       const value = document.createElement("strong");
       row.className = "walkthrough-data-row";
-      label.textContent = field.label;
-      value.textContent = field.value;
+      label.textContent = field.label || "value";
+      value.textContent = field.value || "";
       row.append(label, value);
-      packetData.appendChild(row);
+      container.appendChild(row);
     }});
+  }}
+
+  function renderPacket(step = null) {{
+    if (!packet) return;
+    const fields = step && Array.isArray(step.fields) ? step.fields : [];
+    if (packetSource) packetSource.textContent = step ? step.source : "platform.overview";
+    if (packetTarget) packetTarget.textContent = step ? step.key : "ready";
+    renderDataRows(packetData, fields);
+  }}
+
+  function attachSectionPacket(section, step) {{
+    const fields = step && Array.isArray(step.fields) ? step.fields : [];
+    const inlinePacket = document.createElement("div");
+    const head = document.createElement("div");
+    const label = document.createElement("span");
+    const source = document.createElement("span");
+    const flow = document.createElement("div");
+    const dot = document.createElement("span");
+    const line = document.createElement("span");
+    const target = document.createElement("span");
+    const data = document.createElement("div");
+    inlinePacket.className = "walkthrough-section-packet";
+    inlinePacket.setAttribute("aria-label", "Active section evidence packet");
+    head.className = "walkthrough-packet-head";
+    label.textContent = "Evidence packet arrived";
+    source.className = "walkthrough-source mono";
+    source.textContent = step.source || "platform.overview";
+    flow.className = "walkthrough-flow";
+    dot.className = "packet-dot";
+    dot.setAttribute("aria-hidden", "true");
+    line.className = "packet-line";
+    line.setAttribute("aria-hidden", "true");
+    target.className = "walkthrough-target";
+    target.textContent = step.key;
+    data.className = "walkthrough-data";
+    head.append(label, source);
+    flow.append(dot, line, target);
+    renderDataRows(data, fields);
+    inlinePacket.append(head, flow, data);
+    const sectionLabel = section.querySelector(".label");
+    if (sectionLabel) {{
+      sectionLabel.insertAdjacentElement("afterend", inlinePacket);
+    }} else {{
+      section.prepend(inlinePacket);
+    }}
   }}
 
   function scheduleRefresh() {{
@@ -714,6 +770,7 @@ def _walkthrough_script(
     if (note) note.textContent = "Live refresh is paused during this walkthrough.";
     renderStepList(index);
     renderPacket(step);
+    attachSectionPacket(section, step);
     panel.classList.add("active");
     button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
     section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});

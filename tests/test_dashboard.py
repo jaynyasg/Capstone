@@ -158,6 +158,8 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "const autoRefreshMs = 5000;" in h
     assert "Live refresh is paused during this walkthrough." in h
     assert "Evidence packet" in h
+    assert "Evidence packet arrived" in h
+    assert "walkthrough-section-packet" in h
     assert 'class="walkthrough-data"' in h
     assert 'class="walkthrough-steps"' in h
     assert "walkthrough-active" in h
