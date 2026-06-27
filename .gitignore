@@ -33,6 +33,8 @@ env/
 # ML model artifacts
 *.pt
 *.onnx
+/data/
+/models/
 
 # OS / editor
 .DS_Store

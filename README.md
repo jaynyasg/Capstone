@@ -58,6 +58,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11.
 ```bash
 uv sync --extra dev          # install
 uv sync --extra dev --extra ml  # optional: enable local PyTorch ML paths
+uv sync --extra dev --extra local-llm # optional: enable local LLM adapter training
 uv run aegis-verify          # gate: ruff + pytest (offline, deterministic)
 uv run python -m examples.demo_agent   # baseline-vs-protected demo (live gpt-4o-mini or mock)
 uv run aegis-eval            # run the eval suite → evals/reports/
@@ -69,6 +70,8 @@ Configuration is optional — Aegis runs fully offline with sane defaults. To en
 features, copy `env.example` to `.env` (or `.env.local`) and set keys:
 
 - `OPENAI_API_KEY` — live `gpt-4o-mini` provider (otherwise a deterministic mock is used)
+- `AEGIS_OPENAI_BASE_URL` — optional OpenAI-compatible local model server URL
+- `AEGIS_OPENAI_MODEL` — optional model id for OpenAI-compatible providers
 - `BRAINTRUST_API_KEY` — hosted traces/experiments (otherwise local JSONL only)
 - `AEGIS_CANARY_VAULT_KEY` — Fernet key enabling durable (restart-safe) canary detection
   (otherwise durable detection is disabled; see [Operating the platform](#operating-the-platform-local-state-backups-keys))
@@ -147,8 +150,9 @@ limits are bounded by default and clamped (negative/zero → default, excessive 
 query string can never trigger an unbounded read. `total` always means all matching records;
 `latest` means the returned window.
 
-The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set, else
-a deterministic mock. Host/port via `AEGIS_GATEWAY_HOST` / `AEGIS_GATEWAY_PORT`.
+The provider is chosen by environment: live `gpt-4o-mini` when `OPENAI_API_KEY` is set,
+an OpenAI-compatible local endpoint when `AEGIS_OPENAI_BASE_URL` is set, else a
+deterministic mock. Host/port via `AEGIS_GATEWAY_HOST` / `AEGIS_GATEWAY_PORT`.
 
 ```bash
 curl -s localhost:8000/health
@@ -401,6 +405,40 @@ the `ml` extra, trains the small artifact during build, and starts with
 `AEGIS_ENABLE_ML_PROBE=1`. The probe remains WARN-capped and non-authoritative; deterministic
 detectors and policy still own blocking.
 
+## Local LLM training
+
+Aegis can train a local/open-weight model adapter, but it does **not** train
+`gpt-4o-mini` or any hosted provider model. The supported path is LoRA supervised
+fine-tuning over safe Aegis examples:
+
+1. Export redacted chat-shaped SFT examples from the Aegis eval cases.
+2. Train a LoRA adapter for a local Hugging Face causal language model.
+3. Serve that base model + adapter behind an OpenAI-compatible local server.
+4. Point Aegis at that server; the normal request, tool-call, response, detector, and
+   policy guards still run around the fine-tuned model.
+
+```bash
+uv sync --extra local-llm
+uv run aegis-export-llm-dataset --out data/aegis_sft.jsonl
+uv run aegis-train-local-llm \
+  --base-model Qwen/Qwen2.5-1.5B-Instruct \
+  --dataset data/aegis_sft.jsonl \
+  --out models/aegis-local-lora \
+  --epochs 1
+```
+
+The exporter writes only synthetic/redacted training records and marks
+`raw_secret_included=false`. The adapter is an artifact under `models/` and should be
+versioned/reviewed like any other model artifact before being used in a demo.
+
+To route Aegis to a local server after serving the adapter:
+
+```bash
+AEGIS_OPENAI_BASE_URL=http://127.0.0.1:8001/v1 \
+AEGIS_OPENAI_MODEL=aegis-local \
+uv run aegis-gateway
+```
+
 ## Project structure
 
 ```
@@ -411,8 +449,9 @@ src/aegis/
   policy/             # policy engine + modes
   detectors/          # patterns, encodings, honeytokens, tool_args, partial, nimbus
     ml/               # shared features, Observe + Learn online learner, optional risk probe
+  llm_training/       # safe SFT dataset export + optional local LoRA adapter training
   secrets/            # credential broker + local fake store
-  providers/          # provider abstraction: mock + openai (gpt-4o-mini)
+  providers/          # provider abstraction: mock + OpenAI-compatible endpoints
   platform/           # vNext evidence layer: contract, SQLite store, importers,
                       #   durable canary vault, audit exports, snapshot cache
   tracing.py          # local JSONL (+ optional Braintrust)

@@ -401,9 +401,35 @@ Provider.complete(messages, tools) -> ProviderResponse
 Current provider paths:
 
 - deterministic mock provider for offline tests,
-- OpenAI adapter for live `gpt-4o-mini` when `OPENAI_API_KEY` is set.
+- OpenAI adapter for live `gpt-4o-mini` when `OPENAI_API_KEY` is set,
+- OpenAI-compatible local server when `AEGIS_OPENAI_BASE_URL` is set.
 
 Policy and detector code do not import provider SDKs directly.
+
+## Local LLM Training
+
+Aegis can train a local/open-weight model adapter through `src/aegis/llm_training/`.
+This is separate from Observe + Learn:
+
+- Observe + Learn trains a tiny Aegis detector in the running process.
+- Local LLM training exports safe/redacted SFT records and trains a LoRA adapter for an
+  open-weight causal language model.
+
+The local training flow is:
+
+```text
+eval cases / safe Aegis examples
+  -> aegis-export-llm-dataset
+  -> data/aegis_sft.jsonl
+  -> aegis-train-local-llm --base-model <open model>
+  -> models/aegis-local-lora
+  -> local OpenAI-compatible server
+  -> Aegis gateway provider adapter
+```
+
+The base model and adapter are still wrapped by Aegis at runtime. Training is behavior
+shaping, not the enforcement boundary. Guards, policy, canaries, Nimbus, traces, and the
+platform evidence layer still own the security decision.
 
 ## Evaluation
 
@@ -462,7 +488,11 @@ src/aegis/
   providers/
     base.py              provider abstraction
     mock.py              deterministic offline provider
-    openai_adapter.py    live OpenAI provider adapter
+    openai_adapter.py    live or OpenAI-compatible provider adapter
+
+  llm_training/
+    dataset.py           safe SFT export from Aegis eval/evidence examples
+    train.py             optional LoRA adapter training command
 
   gateway/
     app.py               FastAPI app, guard endpoints, platform API, dashboard routes
@@ -499,6 +529,8 @@ Important settings:
 
 - `AEGIS_POLICY_MODE`: `observe`, `balanced`, or `strict`.
 - `OPENAI_API_KEY`: live OpenAI provider; absent uses mock provider.
+- `AEGIS_OPENAI_BASE_URL`: OpenAI-compatible local model endpoint.
+- `AEGIS_OPENAI_MODEL`: model id used for OpenAI-compatible providers.
 - `BRAINTRUST_API_KEY`: optional hosted observability.
 - `AEGIS_ENABLE_ML_PROBE`: enable optional offline-trained ML risk probe.
 - `AEGIS_ML_PROBE_PATH`: offline probe artifact path.

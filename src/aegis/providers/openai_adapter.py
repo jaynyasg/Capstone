@@ -14,11 +14,21 @@ from aegis.providers.base import Provider, ProviderResponse, ToolCall
 class OpenAIProvider(Provider):
     name = "openai"
 
-    def __init__(self, model: str = "gpt-4o-mini", api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         from openai import OpenAI  # imported lazily so offline tests never need the SDK
 
         self.model = model
-        self._client = OpenAI(api_key=api_key) if api_key else OpenAI()
+        kwargs: dict[str, str] = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = OpenAI(**kwargs)
 
     def complete(
         self,

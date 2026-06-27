@@ -19,6 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 braintrust = ["braintrust>=0.0.150"]
 ml = ["torch>=2.2"]
+local-llm = [
+    "accelerate>=0.33",
+    "datasets>=2.20",
+    "peft>=0.12",
+    "transformers>=4.45",
+    "trl>=0.10",
+]
 visual = ["playwright>=1.45"]
 dev = [
     "pytest>=8.0",
@@ -30,6 +37,8 @@ aegis-verify = "aegis.verify:main"
 aegis-eval = "aegis.evals.cli:main"
 aegis-dashboard = "aegis.dashboard.cli:main"
 aegis-train-probe = "aegis.detectors.ml.train:main"
+aegis-export-llm-dataset = "aegis.llm_training.dataset:main"
+aegis-train-local-llm = "aegis.llm_training.train:main"
 aegis-cift-calibrate = "aegis.cift.cli:main"
 aegis-gateway = "aegis.gateway.cli:main"
 

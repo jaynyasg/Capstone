@@ -63,10 +63,15 @@ def _window_response(kind: str, window: RecordWindow) -> dict[str, Any]:
 
 def _build_provider() -> Provider:
     """Live OpenAI adapter when keyed, else a deterministic mock (offline-safe)."""
-    if os.environ.get("OPENAI_API_KEY"):
+    base_url = os.environ.get("AEGIS_OPENAI_BASE_URL")
+    if os.environ.get("OPENAI_API_KEY") or base_url:
         from aegis.providers.openai_adapter import OpenAIProvider
 
-        return OpenAIProvider("gpt-4o-mini")
+        return OpenAIProvider(
+            os.environ.get("AEGIS_OPENAI_MODEL", "gpt-4o-mini"),
+            api_key=os.environ.get("OPENAI_API_KEY") or "local",
+            base_url=base_url,
+        )
     from aegis.providers.mock import MockProvider
 
     return MockProvider(text="ok")
