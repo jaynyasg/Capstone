@@ -185,7 +185,10 @@ tr:last-child td{border-bottom:none}
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
 .walkthrough-summary-step{display:grid;gap:10px;border:1px solid var(--border);border-radius:8px;
   background:#0f0f0f;padding:12px}
-.walkthrough-summary-step h3{font-size:14px;margin-bottom:8px}
+.walkthrough-summary-step h3{font-size:18px;font-weight:900;color:var(--fg);margin:0;
+  border-left:4px solid var(--sanitize);border-radius:6px;background:#06192a;padding:10px 12px}
+.walkthrough-summary-story{border:1px solid #58a6ff33;border-radius:8px;background:#111820;
+  color:var(--fg);font-size:13px;line-height:1.5;padding:10px}
 .walkthrough-summary-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
   gap:10px}
 .walkthrough-summary-group{border:1px solid #58a6ff33;border-radius:8px;background:#0d0d0d;
@@ -195,9 +198,9 @@ tr:last-child td{border-bottom:none}
 .walkthrough-summary-bullets{margin:0;padding-left:18px;color:var(--fg);font-size:13px}
 .walkthrough-summary-bullets li{margin:4px 0;overflow-wrap:anywhere}
 .walkthrough-summary-bullets span{color:var(--muted);font-weight:700}
-.walkthrough-summary-prompt{border:1px solid #d2992255;border-radius:6px;
-  background:#2b210a;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.walkthrough-summary-prompt{border:1px solid #d2992244;border-radius:6px;
+  background:#17130a;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--muted);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
 @keyframes packetTravel{0%{transform:translateX(-110%)}100%{transform:translateX(240%)}}
 @keyframes packetArrive{from{transform:translateY(-6px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -685,6 +688,82 @@ def _top_mapping_item(values: Any) -> tuple[str, str]:
     return str(name), f"{_num(count):g}"
 
 
+def _top_mapping_fields(values: Any, *, limit: int = 5) -> list[dict[str, str]]:
+    if not isinstance(values, dict) or not values:
+        return [_packet_field("none", "0")]
+    rows = sorted(values.items(), key=lambda kv: -_num(kv[1]))[:limit]
+    return [_packet_field(str(name), f"{_num(count):g}") for name, count in rows]
+
+
+def _ranked_session_fields(sessions: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
+    ranked = sorted(
+        sessions,
+        key=lambda s: (
+            _num(s.get("nimbus_cumulative_score")),
+            _num(s.get("last_seen")),
+        ),
+        reverse=True,
+    )
+    if not ranked:
+        return [_packet_field("none", "No sessions with Nimbus risk yet.")]
+    return [
+        _packet_field(
+            f"#{idx} {session.get('session_id', 'unknown')}",
+            (
+                f"Nimbus {_num(session.get('nimbus_cumulative_score')):.2f}; "
+                f"latest {session.get('latest_action', 'none')}; "
+                f"{session.get('events', 0)} events"
+            ),
+        )
+        for idx, session in enumerate(ranked[:limit], start=1)
+    ]
+
+
+def _decision_fields(recent: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
+    if not recent:
+        return [_packet_field("none", "No recent decisions recorded.")]
+    fields = []
+    for idx, row in enumerate(recent[:limit], start=1):
+        phase = row.get("phase", "unknown")
+        tool = f" / {row.get('tool_name')}" if row.get("tool_name") else ""
+        detectors = ", ".join(dict.fromkeys(row.get("detectors", []) or [])) or "none"
+        summary = row.get("summary") or "no summary"
+        fields.append(
+            _packet_field(
+                f"#{idx} {row.get('action', 'ALLOW')}",
+                f"{phase}{tool}; risk {_num(row.get('risk_score')):.2f}; "
+                f"detectors {detectors}; {_preview(summary, 100)}",
+            )
+        )
+    return fields
+
+
+def _criteria_fields(criteria: dict[str, Any]) -> list[dict[str, str]]:
+    if not criteria:
+        return [_packet_field("none", "No success criteria were reported.")]
+    return [
+        _packet_field("PASS" if ok else "FAIL", str(name))
+        for name, ok in criteria.items()
+    ]
+
+
+def _case_result_fields(cases: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
+    attacks = [c for c in cases if c.get("baseline_leaked") is not None and c.get("worst_action")]
+    if not attacks:
+        return [_packet_field("none", "No baseline/protected attack cases were available.")]
+    fields = []
+    for case in attacks[:limit]:
+        baseline = "baseline leaked" if case.get("baseline_leaked") else "baseline held"
+        fields.append(
+            _packet_field(
+                str(case.get("id", "case")),
+                f"{baseline}; Aegis {case.get('worst_action', 'none')}; "
+                f"{case.get('category', 'uncategorized')}",
+            )
+        )
+    return fields
+
+
 def _walkthrough_steps(
     data: dict[str, Any],
     cases: list[dict[str, Any]],
@@ -726,10 +805,39 @@ def _walkthrough_steps(
     freshness_value = (
         freshness if freshness in ("live", "static") else f"{freshness} ({cache_age:.0f}s)"
     )
+    health_warnings = health.get("warnings", []) if isinstance(health, dict) else []
+    warning_fields = (
+        [
+            _packet_field(
+                f"{w.get('severity', 'warning')} {w.get('source_kind', 'source')}",
+                f"{w.get('warning_type', 'warning')}: {_preview(w.get('detail', ''), 100)}",
+            )
+            for w in health_warnings[:5]
+            if isinstance(w, dict)
+        ]
+        or [_packet_field("evidence", "All configured evidence sources are readable.")]
+    )
+    cift_status = f"{cift_latest.get('model_id', 'none')} / {cift_latest.get('status', 'none')}"
+    runtime_story = (
+        f"The cockpit tied together provider {status.get('provider', 'unknown')}, "
+        f"{canaries.get('total', 0)} canary records, CIFT status {cift_status}, "
+        f"and {len(sessions)} tracked sessions."
+    )
+    eval_story = (
+        f"{headline} evaluation detected {_num(metrics.get('attack_detection_rate')):.0%} "
+        f"of attacks, allowed {_num(metrics.get('benign_allow_rate')):.0%} of benign flows, "
+        f"and averaged {_num(metrics.get('avg_latency_ms')):.2f} ms per turn."
+    )
     payloads = {
         "evidence-health": {
             "source": "snapshot + health",
             "data": "platform.overview.snapshot + platform.overview.health",
+            "story": (
+                "Aegis first checked whether the evidence itself could be trusted: "
+                f"the overview is {freshness_value}, health is {health.get('status', 'healthy')}, "
+                f"and {len(health_warnings or [])} warning(s) were present."
+            ),
+            "details": warning_fields,
             "fields": [
                 _packet_field("status", health.get("status", "healthy")),
                 _packet_field("freshness", freshness_value),
@@ -739,6 +847,18 @@ def _walkthrough_steps(
         "investigate": {
             "source": "api drilldowns",
             "data": "/api/platform/{decisions,sessions,detectors,canaries,cift}",
+            "story": (
+                "The investigation step walked the shared platform API drilldowns: "
+                f"{len(sessions)} sessions, action totals, phase totals, detector totals, "
+                "and model/CIFT records. This shows how an operator narrows from the overview "
+                "into specific evidence slices without reading raw files."
+            ),
+            "details": [
+                _packet_field("sessions investigated", len(sessions)),
+                _packet_field("top action bucket", f"{action_name} ({action_count})"),
+                _packet_field("top detector bucket", f"{detector_name} ({detector_count})"),
+                *_top_mapping_fields(decisions.get("by_phase"), limit=3),
+            ],
             "fields": [
                 _packet_field("sessions", len(sessions)),
                 _packet_field("top action", f"{action_name} ({action_count})"),
@@ -748,18 +868,33 @@ def _walkthrough_steps(
         "platform-cockpit": {
             "source": "runtime + stores",
             "data": "overview.status + overview.canaries + overview.cift + overview.sessions",
+            "story": runtime_story,
+            "details": [
+                _packet_field("provider", status.get("provider", "unknown")),
+                _packet_field("policy", status.get("policy_mode", "unknown")),
+                _packet_field("canary records", canaries.get("total", 0)),
+                _packet_field("CIFT latest", cift_status),
+                _packet_field("tracked sessions", len(sessions)),
+            ],
             "fields": [
                 _packet_field("provider", status.get("provider", "unknown")),
                 _packet_field("canaries", canaries.get("total", 0)),
                 _packet_field(
                     "cift",
-                    f"{cift_latest.get('model_id', 'none')} / {cift_latest.get('status', 'none')}",
+                    cift_status,
                 ),
             ],
         },
         "nimbus-rankings": {
             "source": "session risk",
             "data": "overview.sessions sorted by nimbus_cumulative_score",
+            "story": (
+                "Nimbus ranked sessions by cumulative leakage risk so the operator can start "
+                f"with the riskiest conversation. The top session was "
+                f"{top_session.get('session_id', 'none')} at "
+                f"{_num(top_session.get('nimbus_cumulative_score')):.2f}."
+            ),
+            "details": _ranked_session_fields(sessions),
             "fields": [
                 _packet_field("top session", top_session.get("session_id", "none")),
                 _packet_field("nimbus", f"{_num(top_session.get('nimbus_cumulative_score')):.2f}"),
@@ -769,6 +904,12 @@ def _walkthrough_steps(
         "recent-decisions": {
             "source": "trace events",
             "data": "overview.decisions.recent from trace input_summary + policy_decision",
+            "story": (
+                f"The recent-decision feed listed the latest {len(recent)} guarded event(s) "
+                f"out of {decisions.get('total', len(recent))} matching decisions, including "
+                "phase, tool, action, risk, detectors, and redacted summary."
+            ),
+            "details": _decision_fields(recent),
             "fields": [
                 _packet_field("total", decisions.get("total", len(recent))),
                 _packet_field("latest", latest_decision.get("action", "none")),
@@ -778,6 +919,14 @@ def _walkthrough_steps(
         "eval-summary": {
             "source": f"evals.{headline}",
             "data": f"evals/reports/metrics.json[{headline}]",
+            "story": eval_story,
+            "details": [
+                _packet_field("attack detection", f"{_num(metrics.get('attack_detection_rate')):.0%}"),
+                _packet_field("benign allow rate", f"{_num(metrics.get('benign_allow_rate')):.0%}"),
+                _packet_field("benign false blocks", metrics.get("benign_false_blocks", 0)),
+                _packet_field("evidence completeness", f"{_num(metrics.get('evidence_completeness')):.0%}"),
+                _packet_field("average latency", f"{_num(metrics.get('avg_latency_ms')):.2f} ms"),
+            ],
             "fields": [
                 _packet_field(
                     "detection", f"{_num(metrics.get('attack_detection_rate')):.0%}"
@@ -789,6 +938,12 @@ def _walkthrough_steps(
         "success-criteria": {
             "source": "eval gates",
             "data": f"metrics.success_criteria for policy mode {headline}",
+            "story": (
+                f"The success gate checked {len(criteria)} explicit criterion/criteria for "
+                f"{headline}; {passing_criteria} passed. These are the concrete conditions "
+                "used to decide whether the evaluation evidence is good enough."
+            ),
+            "details": _criteria_fields(criteria),
             "fields": [
                 _packet_field("passing", f"{passing_criteria}/{len(criteria)}"),
                 _packet_field("mode", headline),
@@ -798,6 +953,12 @@ def _walkthrough_steps(
         "baseline-vs-protected": {
             "source": "eval cases",
             "data": "evals/cases/*.yaml joined with evals/reports/results.jsonl outcomes",
+            "story": (
+                f"The baseline comparison checked {len(attacks)} attack case(s). "
+                f"The unprotected baseline leaked in {baseline_leaks}; Aegis blocked "
+                f"{protected_blocks} in the protected path."
+            ),
+            "details": _case_result_fields(cases),
             "fields": [
                 _packet_field("cases", len(attacks)),
                 _packet_field("baseline", f"{baseline_leaks} leaks"),
@@ -807,6 +968,12 @@ def _walkthrough_steps(
         "detector-hit-distribution": {
             "source": "detector metrics",
             "data": f"metrics.detector_hit_distribution for {headline}",
+            "story": (
+                "The detector distribution showed which detection layers carried the saved "
+                f"evaluation evidence. The highest saved hit count was {eval_detector_name} "
+                f"with {eval_detector_count} hit(s)."
+            ),
+            "details": _top_mapping_fields(metrics.get("detector_hit_distribution"), limit=6),
             "fields": [
                 _packet_field("top hit", eval_detector_name),
                 _packet_field("count", eval_detector_count),
@@ -824,6 +991,8 @@ def _walkthrough_steps(
                 "copy": copy,
                 "source": payloads.get(key, {}).get("source", "platform.overview"),
                 "data": payloads.get(key, {}).get("data", "platform.overview"),
+                "story": payloads.get(key, {}).get("story", copy),
+                "details": payloads.get(key, {}).get("details", []),
                 "fields": payloads.get(key, {}).get("fields", []),
             }
         )
@@ -1246,6 +1415,8 @@ def _walkthrough_script(
         purpose: step.copy,
         source: step.source || "platform.overview",
         data: step.data || "platform.overview",
+        story: step.story || step.copy,
+        details: Array.isArray(step.details) ? step.details : [],
         fields: Array.isArray(step.fields) ? step.fields : [],
         result: stepResults.get(step.key) || defaultStepResult(step),
         prompt: activeSample.prompt || "",
@@ -1321,11 +1492,15 @@ def _walkthrough_script(
       const result = step.result || defaultStepResult(step);
       const section = document.createElement("section");
       const heading = document.createElement("h3");
+      const story = document.createElement("p");
       const groups = document.createElement("div");
       const prompt = document.createElement("div");
       const fields = Array.isArray(step.fields) ? step.fields : [];
+      const details = Array.isArray(step.details) ? step.details : [];
       section.className = "walkthrough-summary-step";
       heading.textContent = `Step ${{index + 1}}: ${{step.title}}`;
+      story.className = "walkthrough-summary-story";
+      story.textContent = step.story || step.purpose || "This step reviewed the selected dashboard evidence.";
       groups.className = "walkthrough-summary-groups";
       appendSummaryGroup(groups, "What happened", [
         {{ label: "section", value: step.key }},
@@ -1333,6 +1508,13 @@ def _walkthrough_script(
         {{ label: "source", value: step.source || "platform.overview" }},
         {{ label: "data query", value: step.data || "platform.overview" }},
       ]);
+      appendSummaryGroup(
+        groups,
+        "Story details",
+        details.length
+          ? details
+          : [{{ label: "detail", value: "This step used the highlighted platform values below." }}]
+      );
       appendSummaryGroup(groups, "Live guard result", [
         {{ label: "policy mode", value: result.policyMode || run.policyMode || "unknown" }},
         {{ label: "guard call", value: result.guardCall || run.guardCall || "POST /guard/*" }},
@@ -1352,7 +1534,7 @@ def _walkthrough_script(
       );
       prompt.className = "walkthrough-summary-prompt";
       prompt.textContent = `Prompt used for this step:\\n${{step.prompt || run.samplePrompt || "none"}}`;
-      section.append(heading, groups, prompt);
+      section.append(heading, story, groups, prompt);
       runSummary.appendChild(section);
     }});
   }}

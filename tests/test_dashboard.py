@@ -210,12 +210,22 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "function appendSummaryGroup(container, titleText, bullets)" in h
     assert "walkthrough-summary-groups" in h
     assert "walkthrough-summary-bullets" in h
+    assert "walkthrough-summary-story" in h
     assert "Step ${index + 1}: ${step.title}" in h
+    assert "Aegis first checked whether the evidence itself could be trusted" in h
+    assert "The investigation step walked the shared platform API drilldowns" in h
     assert "What happened" in h
+    assert "Story details" in h
     assert "Live guard result" in h
     assert "Highlighted values" in h
     assert "Prompt used for this step" in h
     assert "Detector hits" in h
+    assert '"label": "#1 risky", "value": "Nimbus 1.40; latest ESCALATE; 5 events"' in h
+    assert (
+        '"label": "#1 BLOCK", "value": "tool_call / send_email; risk 1.00; '
+        'detectors tool_call_argument_scanner; to=attacker@evil.test"'
+    ) in h
+    assert '"label": "PASS", "value": "honeytoken_blocked"' in h
     assert "saveLastRunSummary(summary);" in h
     assert "const restoredSummary = loadLastRunSummary();" in h
     assert "if (restoredSummary) renderRunSummary(restoredSummary);" in h
