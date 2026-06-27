@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 
 from aegis.cift import CiftCalibrationRequest, CiftCertificationStore, calibrate_model
@@ -44,6 +44,11 @@ from aegis.platform.store import (
     EvidenceHealth,
     EvidenceQuery,
     RecordWindow,
+)
+from aegis.platform.walkthrough_runs import (
+    list_walkthrough_runs,
+    load_walkthrough_run,
+    save_walkthrough_run,
 )
 from aegis.providers.base import Provider
 
@@ -89,6 +94,7 @@ def create_app(
     provider = provider or _build_provider()
     cift_store = CiftCertificationStore(settings.cift_path)
     store = SqliteEvidenceStore(settings.evidence_db_path)
+    walkthrough_runs_dir = settings.platform_state_dir / "walkthrough_runs"
 
     app = FastAPI(title="Aegis Gateway", version="0.1.0")
 
@@ -351,6 +357,24 @@ def create_app(
                 render_markdown_bundle(bundle), media_type="text/markdown; charset=utf-8"
             )
         return bundle
+
+    @app.post("/api/walkthrough/runs")
+    def create_walkthrough_run(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        try:
+            return save_walkthrough_run(walkthrough_runs_dir, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/walkthrough/runs")
+    def walkthrough_runs(limit: int = 10) -> dict[str, Any]:
+        return list_walkthrough_runs(walkthrough_runs_dir, limit=limit)
+
+    @app.get("/api/walkthrough/runs/{run_id}")
+    def walkthrough_run(run_id: str) -> dict[str, Any]:
+        run = load_walkthrough_run(walkthrough_runs_dir, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="walkthrough run not found")
+        return run
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> str:

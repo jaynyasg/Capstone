@@ -171,6 +171,18 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "const walkthroughSamples =" in h
     assert 'const sampleStorageKey = "aegis.walkthrough.sampleIndex";' in h
     assert 'const summaryStorageKey = "aegis.walkthrough.lastSummary";' in h
+    assert 'id="walkthrough-run-select"' in h
+    assert 'id="walkthrough-replay-run"' in h
+    assert 'id="walkthrough-save-status"' in h
+    assert "Replay saved run" in h
+    assert "Completed runs are saved as replayable artifacts." in h
+    assert 'fetch("/api/walkthrough/runs?limit=12")' in h
+    assert 'fetch("/api/walkthrough/runs", {' in h
+    assert "function replayRun(summary)" in h
+    assert "function selectedRunSummary()" in h
+    assert "function refreshSavedRuns(preferredId = \"\")" in h
+    assert "function renderRecordedDetectorChart(summary)" in h
+    assert "Recorded guard result:" in h
     assert "function nextSampleForRun()" in h
     assert "activeSample = nextSampleForRun();" in h
     assert 'id="walkthrough-status"' in h
@@ -207,6 +219,7 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "function saveLastRunSummary(summary)" in h
     assert "function loadLastRunSummary()" in h
     assert "function clearLastRunSummary()" in h
+    assert "function persistRunSummary(summary)" in h
     assert "function appendSummaryGroup(container, titleText, bullets)" in h
     assert "walkthrough-summary-groups" in h
     assert "walkthrough-summary-bullets" in h
@@ -226,9 +239,10 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
         'detectors tool_call_argument_scanner; to=attacker@evil.test"'
     ) in h
     assert '"label": "PASS", "value": "honeytoken_blocked"' in h
-    assert "saveLastRunSummary(summary);" in h
+    assert "persistRunSummary(summary);" in h
     assert "const restoredSummary = loadLastRunSummary();" in h
     assert "if (restoredSummary) renderRunSummary(restoredSummary);" in h
+    assert "refreshSavedRuns(restoredSummary && restoredSummary.id" in h
     assert "clearLastRunSummary();" in h
     assert "summaryReady = true;" in h
     assert "runSummary.scrollIntoView" in h

@@ -390,6 +390,13 @@ purpose, platform source/query, prompt, action, risk, detectors, and highlighted
 completed summary is restored after dashboard refreshes and remains visible until the next
 walkthrough run begins.
 
+When the dashboard is served by the gateway, completed walkthroughs are also saved as
+redacted JSON artifacts under `.aegis/platform/walkthrough_runs/`. The dashboard can list
+those saved runs and replay one by stepping through the same section highlights with the
+recorded prompt, policy mode, action, risk, detectors, and highlighted evidence values. Replay
+mode is intentionally read-only: it does not call `/guard/*` again, so a demo can show exactly
+what happened in a prior test run.
+
 ## Provider Architecture
 
 Provider logic lives behind `src/aegis/providers/base.py`:
@@ -408,12 +415,12 @@ Policy and detector code do not import provider SDKs directly.
 
 ## Local LLM Training
 
-Aegis can train a local/open-weight model adapter through `src/aegis/llm_training/`.
-This is separate from Observe + Learn:
+Aegis can train a local/open-weight model through `src/aegis/llm_training/`. This is
+separate from Observe + Learn:
 
 - Observe + Learn trains a tiny Aegis detector in the running process.
-- Local LLM training exports safe/redacted SFT records and trains a LoRA adapter for an
-  open-weight causal language model.
+- Local LLM training exports safe/redacted SFT records and trains either the full
+  open-weight causal language model or, optionally, a LoRA adapter.
 
 The local training flow is:
 
@@ -421,15 +428,16 @@ The local training flow is:
 eval cases / safe Aegis examples
   -> aegis-export-llm-dataset
   -> data/aegis_sft.jsonl
-  -> aegis-train-local-llm --base-model <open model>
-  -> models/aegis-local-lora
+  -> aegis-train-local-llm --training-method full --base-model <open model>
+  -> models/aegis-local-full
   -> local OpenAI-compatible server
   -> Aegis gateway provider adapter
 ```
 
-The base model and adapter are still wrapped by Aegis at runtime. Training is behavior
-shaping, not the enforcement boundary. Guards, policy, canaries, Nimbus, traces, and the
-platform evidence layer still own the security decision.
+The trained model is still wrapped by Aegis at runtime. Training is behavior shaping, not the
+enforcement boundary. Guards, policy, canaries, Nimbus, traces, and the platform evidence
+layer still own the security decision. For low-resource machines, the same command can run
+`--training-method lora` and save only `models/aegis-local-lora`.
 
 ## Evaluation
 
@@ -492,7 +500,7 @@ src/aegis/
 
   llm_training/
     dataset.py           safe SFT export from Aegis eval/evidence examples
-    train.py             optional LoRA adapter training command
+    train.py             optional full/LoRA local model training command
 
   gateway/
     app.py               FastAPI app, guard endpoints, platform API, dashboard routes

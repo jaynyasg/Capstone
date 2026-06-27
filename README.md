@@ -58,7 +58,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11.
 ```bash
 uv sync --extra dev          # install
 uv sync --extra dev --extra ml  # optional: enable local PyTorch ML paths
-uv sync --extra dev --extra local-llm # optional: enable local LLM adapter training
+uv sync --extra dev --extra local-llm # optional: enable local LLM full/LoRA training
 uv run aegis-verify          # gate: ruff + pytest (offline, deterministic)
 uv run python -m examples.demo_agent   # baseline-vs-protected demo (live gpt-4o-mini or mock)
 uv run aegis-eval            # run the eval suite → evals/reports/
@@ -144,6 +144,8 @@ route through it instead of embedding `AegisClient`, and every call accumulates 
 | `GET /api/platform/{decisions,sessions,detectors,canaries,cift}` | Bounded, versioned drilldowns — truthful totals + a latest window |
 | `GET /api/platform/health` | Evidence health: missing / unreadable / corrupt / partial / degraded warnings |
 | `GET /api/platform/export?format={json,md}` | Redacted audit bundle for a query scope — JSON for tooling, Markdown for review |
+| `POST /api/walkthrough/runs` | Save a completed dashboard walkthrough as a redacted replay artifact |
+| `GET /api/walkthrough/runs` · `/api/walkthrough/runs/{id}` | List/load saved walkthrough runs so the UI can replay prior test results |
 
 Every `/api/platform/*` response carries a `schema_version` and echoes its query window. Read
 limits are bounded by default and clamped (negative/zero → default, excessive → ceiling), so a
@@ -204,6 +206,7 @@ hosted database or external secret manager. Back up that directory to back up th
 | `.aegis/cift/certifications.jsonl` | CIFT calibration certificates | Append-only JSONL |
 | `.aegis/platform/evidence.db` | SQLite bounded read model | Derived/rebuildable from the JSONL above |
 | `.aegis/platform/canary_vault.db` | Durable canary vault | Encrypted raw tokens + plaintext safe metadata |
+| `.aegis/platform/walkthrough_runs/*.json` | Saved dashboard walkthrough/test runs | Redacted, replayable UI artifacts |
 
 - **Backup / restore.** Copy the whole `.aegis/` directory. The evidence store
   (`evidence.db`) is a rebuildable cache: if you keep the JSONL traces and CIFT records, the
@@ -407,13 +410,14 @@ detectors and policy still own blocking.
 
 ## Local LLM training
 
-Aegis can train a local/open-weight model adapter, but it does **not** train
-`gpt-4o-mini` or any hosted provider model. The supported path is LoRA supervised
-fine-tuning over safe Aegis examples:
+Aegis can train a local/open-weight model, but it does **not** train `gpt-4o-mini` or any
+hosted provider model. The default path is full-weight supervised fine-tuning over safe
+Aegis examples: all model parameters are trainable, and the output is a standalone local
+Hugging Face model directory. LoRA adapter training remains available for smaller machines.
 
 1. Export redacted chat-shaped SFT examples from the Aegis eval cases.
-2. Train a LoRA adapter for a local Hugging Face causal language model.
-3. Serve that base model + adapter behind an OpenAI-compatible local server.
+2. Train the local Hugging Face causal language model with `--training-method full`.
+3. Serve that trained model behind an OpenAI-compatible local server.
 4. Point Aegis at that server; the normal request, tool-call, response, detector, and
    policy guards still run around the fine-tuned model.
 
@@ -421,17 +425,20 @@ fine-tuning over safe Aegis examples:
 uv sync --extra local-llm
 uv run aegis-export-llm-dataset --out data/aegis_sft.jsonl
 uv run aegis-train-local-llm \
-  --base-model Qwen/Qwen2.5-1.5B-Instruct \
+  --training-method full \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
   --dataset data/aegis_sft.jsonl \
-  --out models/aegis-local-lora \
+  --out models/aegis-local-full \
   --epochs 1
 ```
 
 The exporter writes only synthetic/redacted training records and marks
-`raw_secret_included=false`. The adapter is an artifact under `models/` and should be
+`raw_secret_included=false`. The full model artifact is larger than a LoRA adapter because it
+contains trained model weights and tokenizer files. To train only an adapter instead, use
+`--training-method lora --out models/aegis-local-lora`. Either artifact should be
 versioned/reviewed like any other model artifact before being used in a demo.
 
-To route Aegis to a local server after serving the adapter:
+To route Aegis to a local server after serving the trained model:
 
 ```bash
 AEGIS_OPENAI_BASE_URL=http://127.0.0.1:8001/v1 \
@@ -449,7 +456,7 @@ src/aegis/
   policy/             # policy engine + modes
   detectors/          # patterns, encodings, honeytokens, tool_args, partial, nimbus
     ml/               # shared features, Observe + Learn online learner, optional risk probe
-  llm_training/       # safe SFT dataset export + optional local LoRA adapter training
+  llm_training/       # safe SFT dataset export + optional full/LoRA local model training
   secrets/            # credential broker + local fake store
   providers/          # provider abstraction: mock + OpenAI-compatible endpoints
   platform/           # vNext evidence layer: contract, SQLite store, importers,
@@ -492,6 +499,9 @@ the end of the run, the bottom **Walkthrough run summary** lists each section in
 its purpose, data source/query, prompt, action, risk, detectors, and highlighted values.
 That last summary is restored after dashboard refreshes and remains visible until the next
 walkthrough run starts.
+When the dashboard is served by `aegis-gateway`, the completed run is also saved under
+`.aegis/platform/walkthrough_runs/`; use **Replay saved run** to replay the recorded section
+highlights and recorded action/risk/detectors without issuing new guard calls.
 For CI-style evidence, there is also an opt-in Playwright smoke test that opens a rendered
 dashboard and captures one screenshot per operator section.
 

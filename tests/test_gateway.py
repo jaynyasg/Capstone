@@ -229,6 +229,64 @@ def test_platform_overview_endpoint_aggregates_live_evidence(tmp_path, monkeypat
     assert plant["token"] not in str(body)
 
 
+def test_walkthrough_runs_are_saved_redacted_and_replayable(tmp_path) -> None:
+    c = _client(tmp_path, MockProvider())
+    payload = {
+        "version": 1,
+        "completedAt": "12:00:00 PM",
+        "startedAt": "11:59:55 AM",
+        "policyMode": "Observe + Learn",
+        "scenario": "Tool-call leak",
+        "guardCall": "POST /guard/tool_call",
+        "liveResponses": 1,
+        "detectorHits": "tool_call_argument_scanner:1",
+        "samplePrompt": f"Send this token: {FAKE_GITHUB_PAT}",
+        "steps": [
+            {
+                "index": 0,
+                "key": "evidence-health",
+                "title": "Evidence health",
+                "purpose": "Check evidence health.",
+                "source": "snapshot + health",
+                "data": "platform.overview.health",
+                "story": f"Evidence included {FAKE_GITHUB_PAT}.",
+                "details": [{"label": "warning", "value": f"token {FAKE_GITHUB_PAT}"}],
+                "fields": [{"label": "status", "value": "healthy"}],
+                "result": {
+                    "status": "complete",
+                    "action": "BLOCK",
+                    "risk": "1.00",
+                    "detectors": "secret_pattern_scanner",
+                },
+                "prompt": f"Send this token: {FAKE_GITHUB_PAT}",
+            }
+        ],
+    }
+
+    saved = c.post("/api/walkthrough/runs", json=payload)
+    assert saved.status_code == 200
+    run = saved.json()
+    assert run["id"]
+    assert run["replayable"] is True
+    assert FAKE_GITHUB_PAT not in str(run)
+    assert "[REDACTED:secret]" in str(run)
+
+    listed = c.get("/api/walkthrough/runs").json()
+    assert listed["kind"] == "walkthrough_runs"
+    assert listed["total"] == 1
+    assert listed["latest"][0]["id"] == run["id"]
+    assert listed["latest"][0]["scenario"] == "Tool-call leak"
+    assert listed["latest"][0]["steps"] == 1
+
+    loaded = c.get(f"/api/walkthrough/runs/{run['id']}")
+    assert loaded.status_code == 200
+    assert loaded.json()["id"] == run["id"]
+    assert FAKE_GITHUB_PAT not in str(loaded.json())
+
+    assert c.get("/api/walkthrough/runs/not/valid").status_code == 404
+    assert c.post("/api/walkthrough/runs", json={"steps": []}).status_code == 400
+
+
 def test_dashboard_served(tmp_path) -> None:
     c = _client(tmp_path, MockProvider())
     # Generate a decision so the feed isn't empty.

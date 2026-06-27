@@ -96,8 +96,15 @@ tr:last-child td{border-bottom:none}
 .walkthrough-btn{border:1px solid var(--accent);background:transparent;color:var(--fg);border-radius:6px;
   padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer}
 .walkthrough-btn:hover{background:#005ea222}
+.walkthrough-btn.secondary{border-color:var(--border);color:var(--muted)}
+.walkthrough-btn.secondary:hover{border-color:var(--accent);color:var(--fg)}
 .walkthrough-btn:disabled{cursor:wait;color:var(--muted);border-color:var(--border)}
 .walkthrough-btn:focus-visible{outline:2px solid var(--sanitize);outline-offset:2px}
+.walkthrough-replay-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.walkthrough-run-select{min-width:min(420px,100%);border:1px solid var(--border);border-radius:6px;
+  background:#111;color:var(--fg);padding:6px 8px;font:inherit;font-size:12px}
+.walkthrough-run-select:focus-visible{outline:2px solid var(--sanitize);outline-offset:2px}
+.walkthrough-save-status{font-size:12px;color:var(--muted)}
 .dashboard-section{border-radius:8px;padding:1px 0;margin:0 0 4px;scroll-margin:24px}
 .dashboard-section.walkthrough-active{outline:3px solid var(--accent);outline-offset:6px;
   background:#005ea214;box-shadow:0 0 0 9999px #00000026,0 0 32px #005ea255;color:var(--fg)}
@@ -1039,6 +1046,9 @@ def _walkthrough_script(
   const packetData = panel.querySelector(".walkthrough-data");
   const liveDetectorChart = document.getElementById("walkthrough-live-detectors");
   const runSummary = document.getElementById("walkthrough-run-summary");
+  const replayButton = document.getElementById("walkthrough-replay-run");
+  const runSelect = document.getElementById("walkthrough-run-select");
+  const saveStatus = document.getElementById("walkthrough-save-status");
   let timer = null;
   let refreshTimer = null;
   let liveDetectorResponses = 0;
@@ -1048,6 +1058,7 @@ def _walkthrough_script(
   let currentRunId = 0;
   let runStartedAt = null;
   let summaryReady = false;
+  let replayMode = false;
   const stepResults = new Map();
   let activeSample = walkthroughSamples[0] || {{
     label: "Sample",
@@ -1067,6 +1078,13 @@ def _walkthrough_script(
 
   function policyModeLabel(mode) {{
     return mode === "observe" ? "Observe + Learn" : mode.charAt(0).toUpperCase() + mode.slice(1);
+  }}
+
+  function policyModeValue(value) {{
+    const normalized = String(value || "").toLowerCase();
+    if (normalized.includes("observe")) return "observe";
+    if (normalized.includes("strict")) return "strict";
+    return "balanced";
   }}
 
   policyModeButtons.forEach((item) => {{
@@ -1113,10 +1131,10 @@ def _walkthrough_script(
     }});
   }}
 
-  function renderStepList(activeIndex = -1) {{
+  function renderStepList(activeIndex = -1, sourceSteps = steps) {{
     if (!stepList) return;
     stepList.innerHTML = "";
-    steps.forEach((step, index) => {{
+    sourceSteps.forEach((step, index) => {{
       const item = document.createElement("div");
       item.className = "walkthrough-step";
       if (index < activeIndex) item.classList.add("done");
@@ -1213,7 +1231,9 @@ def _walkthrough_script(
     link.href = `/try?mode=${{encodeURIComponent(scanMode)}}&policy=${{encodeURIComponent(selectedPolicyMode)}}&session=${{encodeURIComponent(session)}}&text=${{encodeURIComponent(prompt)}}`;
     link.textContent = "Open in Test Console";
     live.className = "walkthrough-live-result";
-    live.textContent = "Live guard test runs automatically when this step starts.";
+    live.textContent = replayMode
+      ? "Recorded guard result replays when this step appears."
+      : "Live guard test runs automatically when this step starts.";
     head.append(label, mode);
     actions.append(copyButton, link);
     container.append(head, text, actions, live);
@@ -1273,13 +1293,16 @@ def _walkthrough_script(
     liveDetectorChart.innerHTML = "";
     const summary = document.createElement("div");
     summary.className = "det";
-    summary.textContent = `${{liveDetectorResponses}} live guard response${{liveDetectorResponses === 1 ? "" : "s"}} in this walkthrough`;
+    const responseKind = replayMode ? "recorded guard response" : "live guard response";
+    summary.textContent = `${{liveDetectorResponses}} ${{responseKind}}${{liveDetectorResponses === 1 ? "" : "s"}} in this walkthrough`;
     liveDetectorChart.appendChild(summary);
     const rows = [...liveDetectorCounts.entries()].sort((a, b) => b[1] - a[1]);
     if (!rows.length) {{
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = liveDetectorResponses
+      empty.textContent = replayMode
+        ? "No detector hits were recorded in this saved walkthrough."
+        : liveDetectorResponses
         ? "No detector hits from live walkthrough prompts yet."
         : "Run walkthrough to collect live guard detector hits. This resets each run.";
       liveDetectorChart.appendChild(empty);
@@ -1306,6 +1329,22 @@ def _walkthrough_script(
   function resetLiveDetectorChart() {{
     liveDetectorResponses = 0;
     liveDetectorCounts.clear();
+    renderLiveDetectorChart();
+  }}
+
+  function renderRecordedDetectorChart(summary) {{
+    liveDetectorResponses = Number(summary && summary.liveResponses ? summary.liveResponses : 0);
+    liveDetectorCounts.clear();
+    String(summary && summary.detectorHits ? summary.detectorHits : "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach((part) => {{
+        const pieces = part.split(":");
+        const name = pieces[0] ? pieces[0].trim() : "";
+        const count = Number(pieces[1] || 0);
+        if (name && name !== "none" && count > 0) liveDetectorCounts.set(name, count);
+      }});
     renderLiveDetectorChart();
   }}
 
@@ -1432,6 +1471,10 @@ def _walkthrough_script(
     }}
   }}
 
+  function setSaveStatus(message) {{
+    if (saveStatus) saveStatus.textContent = message;
+  }}
+
   function loadLastRunSummary() {{
     try {{
       const raw = window.localStorage.getItem(summaryStorageKey);
@@ -1441,6 +1484,135 @@ def _walkthrough_script(
     }} catch (err) {{
       return null;
     }}
+  }}
+
+  function runOptionLabel(meta) {{
+    const when = meta.createdAt || meta.completedAt || "saved run";
+    const scenario = meta.scenario || "sample";
+    const policy = meta.policyMode || "policy";
+    const responses = Number(meta.liveResponses || 0);
+    return `${{when}} · ${{scenario}} · ${{policy}} · ${{responses}} response${{responses === 1 ? "" : "s"}}`;
+  }}
+
+  function setReplayButtonEnabled() {{
+    if (!replayButton) return;
+    replayButton.disabled = Boolean(timer) || Boolean(button && button.disabled) || !(runSelect && runSelect.value);
+  }}
+
+  function renderRunOptions(runs, preferredId = "") {{
+    if (!runSelect) return;
+    runSelect.innerHTML = "";
+    const restored = loadLastRunSummary();
+    const hasRuns = Array.isArray(runs) && runs.length > 0;
+    if (hasRuns) {{
+      runs.forEach((meta) => {{
+        const option = document.createElement("option");
+        option.value = meta.id || "";
+        option.textContent = runOptionLabel(meta);
+        runSelect.appendChild(option);
+      }});
+      const requested = preferredId && runs.some((meta) => meta.id === preferredId);
+      runSelect.value = requested ? preferredId : (runs[0].id || "");
+    }} else if (restored) {{
+      const option = document.createElement("option");
+      option.value = "__browser_last__";
+      option.textContent = "Last browser run · not saved on server";
+      runSelect.appendChild(option);
+    }} else {{
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No saved walkthrough runs yet.";
+      runSelect.appendChild(option);
+    }}
+    setReplayButtonEnabled();
+  }}
+
+  async function refreshSavedRuns(preferredId = "") {{
+    if (!runSelect) return;
+    try {{
+      const response = await fetch("/api/walkthrough/runs?limit=12");
+      if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+      const body = await response.json();
+      renderRunOptions(Array.isArray(body.latest) ? body.latest : [], preferredId);
+      if (body.total) {{
+        setSaveStatus(`${{body.total}} replayable walkthrough run${{body.total === 1 ? "" : "s"}} saved.`);
+      }}
+    }} catch (err) {{
+      renderRunOptions([], "");
+      const restored = loadLastRunSummary();
+      setSaveStatus(
+        restored
+          ? "Replay API unavailable here; the last browser run can still be replayed."
+          : "Replay API unavailable until the dashboard is served by the gateway."
+      );
+    }}
+  }}
+
+  async function persistRunSummary(summary) {{
+    saveLastRunSummary(summary);
+    setSaveStatus("Saving replayable walkthrough run...");
+    try {{
+      const response = await fetch("/api/walkthrough/runs", {{
+        method: "POST",
+        headers: {{ "content-type": "application/json" }},
+        body: JSON.stringify(summary)
+      }});
+      const saved = await response.json();
+      if (!response.ok) throw new Error(saved.detail || `HTTP ${{response.status}}`);
+      saveLastRunSummary(saved);
+      renderRunSummary(saved);
+      setSaveStatus(`Saved replayable run ${{saved.id || ""}}.`);
+      await refreshSavedRuns(saved.id || "");
+    }} catch (err) {{
+      setSaveStatus("Could not save to the replay API; kept the last run in this browser.");
+      await refreshSavedRuns("");
+    }}
+  }}
+
+  function guardModeFromCall(guardCall) {{
+    const text = String(guardCall || "");
+    if (text.includes("/guard/request")) return "request";
+    if (text.includes("/guard/tool_call")) return "tool_call";
+    return "response";
+  }}
+
+  function sampleFromSummary(summary) {{
+    const firstPromptStep = Array.isArray(summary.steps)
+      ? summary.steps.find((step) => step && step.prompt)
+      : null;
+    return {{
+      label: summary.scenario || "Recorded walkthrough",
+      mode: guardModeFromCall(summary.guardCall),
+      prompt: summary.samplePrompt || (firstPromptStep ? firstPromptStep.prompt : ""),
+      session: summary.id || "walkthrough-replay"
+    }};
+  }}
+
+  function mergedReplayStep(step) {{
+    const base = steps.find((item) => item.key === step.key) || {{}};
+    return {{
+      ...base,
+      ...step,
+      copy: step.purpose || step.copy || base.copy || step.title || "Replay recorded step.",
+      fields: Array.isArray(step.fields) ? step.fields : (Array.isArray(base.fields) ? base.fields : []),
+      details: Array.isArray(step.details) ? step.details : (Array.isArray(base.details) ? base.details : []),
+    }};
+  }}
+
+  function replayStepList(summary) {{
+    const recorded = Array.isArray(summary.steps) && summary.steps.length ? summary.steps : steps;
+    return recorded.map((step) => mergedReplayStep(step));
+  }}
+
+  function renderRecordedResult(step, result) {{
+    const action = result && result.action ? result.action : "UNKNOWN";
+    const risk = result && result.risk ? result.risk : "n/a";
+    const detectors = result && result.detectors ? result.detectors : "none";
+    updateLiveResult(
+      step,
+      `Recorded guard result: ${{action}} · risk ${{risk}} · detectors ${{detectors}}`,
+      resultClass(action)
+    );
   }}
 
   function appendSummaryField(container, labelText, valueText) {{
@@ -1656,6 +1828,7 @@ def _walkthrough_script(
     const step = steps[index];
     const section = document.querySelector(`[data-section="${{step.key}}"]`);
     if (!section) return;
+    replayMode = false;
     clearActive();
     section.classList.add("walkthrough-active");
     title.textContent = `${{index + 1}}/${{steps.length}} · ${{step.title}}`;
@@ -1667,6 +1840,25 @@ def _walkthrough_script(
     runGuardTest(step, currentRunId);
     panel.classList.add("active");
     button.textContent = `Running ${{index + 1}}/${{steps.length}}`;
+    section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
+  }}
+
+  function showReplayStep(index, replaySteps) {{
+    const step = replaySteps[index];
+    const section = document.querySelector(`[data-section="${{step.key}}"]`);
+    if (!section) return;
+    replayMode = true;
+    clearActive();
+    section.classList.add("walkthrough-active");
+    title.textContent = `Replay ${{index + 1}}/${{replaySteps.length}} · ${{step.title}}`;
+    copy.textContent = step.story || step.copy || "Replaying saved walkthrough evidence.";
+    if (note) note.textContent = "Replaying saved test results; no live guard calls are running.";
+    renderStepList(index, replaySteps);
+    renderPacket(step);
+    attachSectionPacket(section, step);
+    renderRecordedResult(step, step.result || {{}});
+    panel.classList.add("active");
+    button.textContent = `Replaying ${{index + 1}}/${{replaySteps.length}}`;
     section.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "center" }});
   }}
 
@@ -1683,6 +1875,31 @@ def _walkthrough_script(
     if (packetTarget) packetTarget.textContent = "complete";
     summaryReady = true;
     const summary = currentRunSummary();
+    persistRunSummary(summary);
+    renderRunSummary(summary);
+    if (runSummary) {{
+      runSummary.scrollIntoView({{ behavior: intervalMs < 1500 ? "auto" : "smooth", block: "start" }});
+    }}
+    window.setTimeout(() => {{
+      clearActive();
+      panel.classList.remove("active");
+    }}, 1800);
+  }}
+
+  function finishReplay(summary, replaySteps) {{
+    window.clearInterval(timer);
+    timer = null;
+    replayMode = false;
+    resumeRefresh();
+    button.disabled = false;
+    button.textContent = "Run walkthrough";
+    setReplayButtonEnabled();
+    if (title) title.textContent = "Replay complete";
+    if (copy) copy.textContent = "Saved walkthrough results were replayed.";
+    if (note) note.textContent = "Live refresh has resumed.";
+    renderStepList(replaySteps.length, replaySteps);
+    if (packetTarget) packetTarget.textContent = "replay complete";
+    summaryReady = true;
     saveLastRunSummary(summary);
     renderRunSummary(summary);
     if (runSummary) {{
@@ -1694,16 +1911,49 @@ def _walkthrough_script(
     }}, 1800);
   }}
 
+  function replayRun(summary) {{
+    const replaySteps = replayStepList(summary || {{}});
+    if (!replaySteps.length) {{
+      setSaveStatus("Selected walkthrough has no replayable steps.");
+      return;
+    }}
+    if (timer) window.clearInterval(timer);
+    pauseRefresh();
+    replayMode = true;
+    renderRecordedDetectorChart(summary || {{}});
+    currentRunId += 1;
+    summaryReady = true;
+    activeSample = sampleFromSummary(summary || {{}});
+    setPolicyMode(policyModeValue(summary && summary.policyMode));
+    renderRunSummary(summary);
+    button.disabled = true;
+    setReplayButtonEnabled();
+    button.textContent = "Replaying...";
+    let index = 0;
+    showReplayStep(index, replaySteps);
+    timer = window.setInterval(() => {{
+      index += 1;
+      if (index >= replaySteps.length) {{
+        finishReplay(summary, replaySteps);
+        return;
+      }}
+      showReplayStep(index, replaySteps);
+    }}, intervalMs);
+  }}
+
   button.addEventListener("click", () => {{
     if (timer) window.clearInterval(timer);
     pauseRefresh();
+    replayMode = false;
     resetLiveDetectorChart();
     currentRunId += 1;
     runStartedAt = new Date().toLocaleTimeString();
     clearLastRunSummary();
     resetRunSummary();
+    setSaveStatus("Recording walkthrough run...");
     activeSample = nextSampleForRun();
     button.disabled = true;
+    setReplayButtonEnabled();
     button.textContent = "Running...";
     let index = 0;
     showStep(index);
@@ -1716,11 +1966,47 @@ def _walkthrough_script(
       showStep(index);
     }}, intervalMs);
   }});
+
+  if (runSelect) {{
+    runSelect.addEventListener("change", setReplayButtonEnabled);
+  }}
+
+  async function selectedRunSummary() {{
+    const runId = runSelect ? runSelect.value : "";
+    if (!runId) return null;
+    if (runId === "__browser_last__") return loadLastRunSummary();
+    const response = await fetch(`/api/walkthrough/runs/${{encodeURIComponent(runId)}}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || `HTTP ${{response.status}}`);
+    return body;
+  }}
+
+  if (replayButton) {{
+    replayButton.addEventListener("click", async () => {{
+      if (timer) return;
+      setSaveStatus("Loading saved walkthrough run...");
+      try {{
+        const summary = await selectedRunSummary();
+        if (!summary) {{
+          setSaveStatus("No saved walkthrough run is selected.");
+          return;
+        }}
+        saveLastRunSummary(summary);
+        renderRunSummary(summary);
+        setSaveStatus(`Replaying ${{summary.id || "last browser run"}}.`);
+        replayRun(summary);
+      }} catch (err) {{
+        setSaveStatus(`Replay unavailable: ${{err && err.message ? err.message : err}}`);
+        setReplayButtonEnabled();
+      }}
+    }});
+  }}
   renderStepList();
   renderPacket();
   renderLiveDetectorChart();
   const restoredSummary = loadLastRunSummary();
   if (restoredSummary) renderRunSummary(restoredSummary);
+  refreshSavedRuns(restoredSummary && restoredSummary.id ? restoredSummary.id : "");
   scheduleRefresh();
 }})();
 </script>
@@ -1854,6 +2140,13 @@ def render_html(
 
 <section class="dashboard-section" data-section="walkthrough-run-summary">
 <div class="label">Walkthrough run summary</div>
+<div class="walkthrough-replay-controls">
+  <select id="walkthrough-run-select" class="walkthrough-run-select" aria-label="Saved walkthrough runs">
+    <option value="">No saved walkthrough runs loaded.</option>
+  </select>
+  <button id="walkthrough-replay-run" class="walkthrough-btn secondary" type="button" disabled>Replay saved run</button>
+  <span id="walkthrough-save-status" class="walkthrough-save-status">Completed runs are saved as replayable artifacts.</span>
+</div>
 <div id="walkthrough-run-summary" class="card walkthrough-run-summary" aria-live="polite">
   <div class="empty">Run walkthrough to generate a step-by-step summary.</div>
 </div>
