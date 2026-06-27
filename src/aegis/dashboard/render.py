@@ -183,12 +183,19 @@ tr:last-child td{border-bottom:none}
   text-transform:uppercase}
 .walkthrough-summary-field strong{display:block;margin-top:3px;color:var(--fg);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
-.walkthrough-summary-step{border:1px solid var(--border);border-radius:8px;background:#0f0f0f;padding:12px}
+.walkthrough-summary-step{display:grid;gap:10px;border:1px solid var(--border);border-radius:8px;
+  background:#0f0f0f;padding:12px}
 .walkthrough-summary-step h3{font-size:14px;margin-bottom:8px}
-.walkthrough-summary-step .walkthrough-data{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
-.walkthrough-summary-step .walkthrough-data-row{grid-template-columns:1fr;gap:2px;
-  border:1px solid #58a6ff33;border-radius:6px;background:#0d0d0d;padding:7px}
-.walkthrough-summary-prompt{margin-top:8px;border:1px solid #d2992255;border-radius:6px;
+.walkthrough-summary-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+  gap:10px}
+.walkthrough-summary-group{border:1px solid #58a6ff33;border-radius:8px;background:#0d0d0d;
+  padding:10px}
+.walkthrough-summary-group-title{font-size:11px;color:var(--sanitize);font-weight:800;
+  text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px}
+.walkthrough-summary-bullets{margin:0;padding-left:18px;color:var(--fg);font-size:13px}
+.walkthrough-summary-bullets li{margin:4px 0;overflow-wrap:anywhere}
+.walkthrough-summary-bullets span{color:var(--muted);font-weight:700}
+.walkthrough-summary-prompt{border:1px solid #d2992255;border-radius:6px;
   background:#2b210a;padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 @keyframes packetPulse{0%,100%{transform:scale(1);opacity:0.8}50%{transform:scale(1.28);opacity:1}}
@@ -1276,6 +1283,25 @@ def _walkthrough_script(
     container.appendChild(field);
   }}
 
+  function appendSummaryGroup(container, titleText, bullets) {{
+    const group = document.createElement("div");
+    const title = document.createElement("div");
+    const list = document.createElement("ul");
+    group.className = "walkthrough-summary-group";
+    title.className = "walkthrough-summary-group-title";
+    title.textContent = titleText;
+    list.className = "walkthrough-summary-bullets";
+    (bullets && bullets.length ? bullets : [{{ label: "note", value: "none" }}]).forEach((bullet) => {{
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${{bullet.label || "item"}}: `;
+      item.append(label, document.createTextNode(bullet.value || "none"));
+      list.appendChild(item);
+    }});
+    group.append(title, list);
+    container.appendChild(group);
+  }}
+
   function renderRunSummary(summary = null) {{
     if (!runSummary) return;
     const run = summary || currentRunSummary();
@@ -1295,32 +1321,38 @@ def _walkthrough_script(
       const result = step.result || defaultStepResult(step);
       const section = document.createElement("section");
       const heading = document.createElement("h3");
-      const values = document.createElement("div");
+      const groups = document.createElement("div");
       const prompt = document.createElement("div");
+      const fields = Array.isArray(step.fields) ? step.fields : [];
       section.className = "walkthrough-summary-step";
       heading.textContent = `Step ${{index + 1}}: ${{step.title}}`;
-      values.className = "walkthrough-data";
-      renderDataRows(values, [
+      groups.className = "walkthrough-summary-groups";
+      appendSummaryGroup(groups, "What happened", [
         {{ label: "section", value: step.key }},
         {{ label: "purpose", value: step.purpose || step.copy }},
         {{ label: "source", value: step.source || "platform.overview" }},
         {{ label: "data query", value: step.data || "platform.overview" }},
+      ]);
+      appendSummaryGroup(groups, "Live guard result", [
         {{ label: "policy mode", value: result.policyMode || run.policyMode || "unknown" }},
         {{ label: "guard call", value: result.guardCall || run.guardCall || "POST /guard/*" }},
         {{ label: "status", value: result.status }},
         {{ label: "action", value: result.action || "pending" }},
         {{ label: "risk", value: result.risk || "pending" }},
         {{ label: "detectors", value: result.detectors || "pending" }},
-        {{ label: "recorded", value: result.recordedAt || "pending" }},
         {{ label: "detail", value: result.detail || "none" }},
-        ...((Array.isArray(step.fields) ? step.fields : []).map((field) => ({{
-          label: `value: ${{field.label || "field"}}`,
-          value: field.value || "",
-        }}))),
+        {{ label: "recorded", value: result.recordedAt || "pending" }},
       ]);
+      appendSummaryGroup(
+        groups,
+        "Highlighted values",
+        fields.length
+          ? fields.map((field) => ({{ label: field.label || "field", value: field.value || "" }}))
+          : [{{ label: "values", value: "No highlighted values for this step." }}]
+      );
       prompt.className = "walkthrough-summary-prompt";
       prompt.textContent = `Prompt used for this step:\\n${{step.prompt || run.samplePrompt || "none"}}`;
-      section.append(heading, values, prompt);
+      section.append(heading, groups, prompt);
       runSummary.appendChild(section);
     }});
   }}

@@ -207,7 +207,13 @@ def test_renders_deployed_walkthrough_button_and_section_targets() -> None:
     assert "function saveLastRunSummary(summary)" in h
     assert "function loadLastRunSummary()" in h
     assert "function clearLastRunSummary()" in h
+    assert "function appendSummaryGroup(container, titleText, bullets)" in h
+    assert "walkthrough-summary-groups" in h
+    assert "walkthrough-summary-bullets" in h
     assert "Step ${index + 1}: ${step.title}" in h
+    assert "What happened" in h
+    assert "Live guard result" in h
+    assert "Highlighted values" in h
     assert "Prompt used for this step" in h
     assert "Detector hits" in h
     assert "saveLastRunSummary(summary);" in h
